@@ -1,0 +1,31 @@
+// Auto-generated UI Automation Script
+// Generated: {{ date.now | date.to_string "%Y-%m-%d %H:%M:%S" }}
+
+using System;
+using Cascade.UIAutomation.Elements;
+using Cascade.UIAutomation.Discovery;
+using Cascade.UIAutomation.Actions;
+using System.Threading.Tasks;
+
+namespace {{ namespace }}
+{
+    public class {{ class_name }}
+    {
+        private readonly IElementDiscovery _discovery;
+        private readonly IActionExecutor _executor;
+        
+        public {{ class_name }}(IElementDiscovery discovery, IActionExecutor executor)
+        {
+            _discovery = discovery;
+            _executor = executor;
+        }
+        
+        {{ for action in actions }}
+        public async Task {{ action.name }}Async()
+        {
+            {{ action.code }}
+        }
+        {{ end }}
+    }
+}
+

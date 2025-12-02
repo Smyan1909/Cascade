@@ -1,0 +1,39 @@
+// Auto-generated Agent Class
+// Agent: {{ agent.name }}
+// Target Application: {{ agent.target_application }}
+
+using Cascade.UIAutomation;
+using Cascade.UIAutomation.Discovery;
+using Cascade.Core;
+using System.Threading.Tasks;
+using System.Collections.Generic;
+
+namespace {{ namespace }}
+{
+    public class {{ class_name }}
+    {
+        private readonly IElementDiscovery _discovery;
+        private readonly IActionExecutor _executor;
+        
+        public {{ class_name }}(IElementDiscovery discovery, IActionExecutor executor)
+        {
+            _discovery = discovery;
+            _executor = executor;
+        }
+        
+        public IReadOnlyList<string> Capabilities => new[] 
+        {
+            {{ for capability in agent.capabilities }}
+            "{{ capability }}",
+            {{ end }}
+        };
+        
+        {{ for action in agent.actions }}
+        public async Task {{ action.name }}Async()
+        {
+            {{ action.code }}
+        }
+        {{ end }}
+    }
+}
+

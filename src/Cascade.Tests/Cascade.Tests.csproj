@@ -32,6 +32,7 @@
     <ProjectReference Include="..\Cascade.Database\Cascade.Database.csproj" />
     <ProjectReference Include="..\Cascade.UIAutomation\Cascade.UIAutomation.csproj" />
     <ProjectReference Include="..\Cascade.Vision\Cascade.Vision.csproj" />
+    <ProjectReference Include="..\Cascade.CodeGen\Cascade.CodeGen.csproj" />
   </ItemGroup>
 
 </Project>

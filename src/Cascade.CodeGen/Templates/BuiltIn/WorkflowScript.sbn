@@ -1,0 +1,32 @@
+// Auto-generated Workflow Script
+// Workflow: {{ workflow.name }}
+
+using Cascade.UIAutomation;
+using Cascade.UIAutomation.Discovery;
+using Cascade.Core;
+using System.Threading.Tasks;
+
+namespace {{ namespace }}
+{
+    public class {{ class_name }} : IWorkflow
+    {
+        {{ for step in workflow.steps }}
+        private async Task Step{{ for.index }}Async(WorkflowContext context)
+        {
+            // {{ step.description }}
+            {{ step.code }}
+        }
+        {{ end }}
+        
+        public async Task ExecuteAsync(WorkflowContext context)
+        {
+            {{ for step in workflow.steps }}
+            await Step{{ for.index }}Async(context);
+            {{ if step.delay_after }}
+            await Task.Delay({{ step.delay_after }});
+            {{ end }}
+            {{ end }}
+        }
+    }
+}
+

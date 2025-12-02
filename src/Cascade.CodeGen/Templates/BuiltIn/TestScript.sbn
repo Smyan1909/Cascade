@@ -1,0 +1,32 @@
+// Auto-generated Test Script
+// Generated: {{ date.now | date.to_string "%Y-%m-%d %H:%M:%S" }}
+
+using Cascade.UIAutomation;
+using Cascade.UIAutomation.Discovery;
+using Cascade.Core;
+using System.Threading.Tasks;
+using Xunit;
+
+namespace {{ namespace }}
+{
+    public class {{ class_name }}
+    {
+        private readonly IElementDiscovery _discovery;
+        private readonly IActionExecutor _executor;
+        
+        public {{ class_name }}(IElementDiscovery discovery, IActionExecutor executor)
+        {
+            _discovery = discovery;
+            _executor = executor;
+        }
+        
+        {{ for test in tests }}
+        [Fact]
+        public async Task {{ test.name }}Test()
+        {
+            {{ test.code }}
+        }
+        {{ end }}
+    }
+}
+
