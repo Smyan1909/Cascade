@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
@@ -21,14 +21,18 @@
     </PackageReference>
     <PackageReference Include="Moq" Version="4.20.70" />
     <PackageReference Include="FluentAssertions" Version="6.12.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Cascade.Core\Cascade.Core.csproj" />
+    <ProjectReference Include="..\Cascade.Database\Cascade.Database.csproj" />
+    <!-- Temporarily disabled due to SDK version issues
     <ProjectReference Include="..\Cascade.UIAutomation\Cascade.UIAutomation.csproj" />
     <ProjectReference Include="..\Cascade.Vision\Cascade.Vision.csproj" />
     <ProjectReference Include="..\Cascade.CodeGen\Cascade.CodeGen.csproj" />
-    <ProjectReference Include="..\Cascade.Database\Cascade.Database.csproj" />
+    -->
   </ItemGroup>
 
 </Project>
