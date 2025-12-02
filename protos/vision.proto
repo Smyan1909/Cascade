@@ -29,6 +29,19 @@ service VisionService {
     rpc DetectElements(DetectElementsRequest) returns (VisualElementsResponse);
 }
 
+// PaddleOCR Service - Vision Transformer based OCR (Python gRPC service)
+// Used as a fallback when Windows OCR and Tesseract fail to recognize text
+service PaddleOcrService {
+    // Basic OCR recognition
+    rpc Recognize(PaddleOcrRequest) returns (PaddleOcrResponse);
+    
+    // Streaming for multiple images (batch processing)
+    rpc RecognizeBatch(stream PaddleOcrRequest) returns (stream PaddleOcrResponse);
+    
+    // Health check and service status
+    rpc GetStatus(PaddleOcrStatusRequest) returns (PaddleOcrStatus);
+}
+
 // Screenshot requests
 message CaptureScreenRequest {
     int32 screen_index = 1;
@@ -192,6 +205,76 @@ message VisualElement {
     cascade.Rectangle bounding_box = 2;
     double confidence = 3;
     string text = 4;
+}
+
+// PaddleOCR Messages
+
+// Model selection for PaddleOCR
+enum PaddleOcrModelType {
+    PADDLE_OCR_MODEL_UNSPECIFIED = 0;
+    PADDLE_OCR_MODEL_VITSTR = 1;       // Vision Transformer - balanced accuracy/speed
+    PADDLE_OCR_MODEL_SVTR = 2;         // Single Visual Model - faster inference
+    PADDLE_OCR_MODEL_PP_OCRV4 = 3;     // Latest PP-OCR model - best accuracy (default)
+}
+
+message PaddleOcrRequest {
+    bytes image_data = 1;
+    string language = 2;                          // e.g., "en", "ch", "japan"
+    PaddleOcrModelType model = 3;
+    bool use_angle_classifier = 4;                // Detect and correct text rotation
+    bool detect_only = 5;                         // Only detect text regions, don't recognize
+    PaddleOcrPreprocessing preprocessing = 6;     // Optional preprocessing options
+}
+
+message PaddleOcrPreprocessing {
+    bool auto_enhance = 1;          // Auto-enhance for better recognition
+    int32 scale_factor = 2;         // Upscale factor (1-4)
+    bool deskew = 3;                // Auto-deskew rotated text
+    bool denoise = 4;               // Apply denoising
+}
+
+message PaddleOcrResponse {
+    bool success = 1;
+    string error_message = 2;
+    string full_text = 3;
+    double confidence = 4;
+    repeated PaddleOcrTextBlock blocks = 5;
+    int32 processing_time_ms = 6;
+    string model_used = 7;
+}
+
+message PaddleOcrTextBlock {
+    string text = 1;
+    repeated PaddleOcrPoint polygon = 2;   // 4-point polygon for rotated text support
+    cascade.Rectangle bounding_box = 3;    // Axis-aligned bounding box
+    double confidence = 4;
+    repeated PaddleOcrWord words = 5;
+}
+
+message PaddleOcrPoint {
+    int32 x = 1;
+    int32 y = 2;
+}
+
+message PaddleOcrWord {
+    string text = 1;
+    repeated PaddleOcrPoint polygon = 2;
+    cascade.Rectangle bounding_box = 3;
+    double confidence = 4;
+}
+
+message PaddleOcrStatusRequest {
+    // Empty request for status check
+}
+
+message PaddleOcrStatus {
+    bool is_ready = 1;
+    string model_loaded = 2;
+    bool gpu_available = 3;
+    int32 gpu_memory_used_mb = 4;
+    repeated string supported_languages = 5;
+    string paddle_version = 6;
+    string paddleocr_version = 7;
 }
 
 
