@@ -4,6 +4,11 @@
 
 The `Cascade.Vision` module provides visual analysis capabilities including screenshot capture, OCR (Optical Character Recognition), visual element detection, and change detection. This module complements UI Automation by handling scenarios where programmatic element access is limited.
 
+The OCR system uses a tiered approach optimized for speed:
+1. **Windows OCR** (Primary) - Fastest, built-in Windows 10+ engine
+2. **Tesseract** (Secondary) - Fast local fallback with broad language support  
+3. **PaddleOCR via gRPC** (Fallback) - Vision Transformer-based engine for difficult cases
+
 ## Dependencies
 
 ```xml
@@ -11,6 +16,8 @@ The `Cascade.Vision` module provides visual analysis capabilities including scre
 <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
 <PackageReference Include="Tesseract" Version="5.2.0" />
 <PackageReference Include="SixLabors.ImageSharp" Version="3.1.0" />
+<PackageReference Include="Grpc.Net.Client" Version="2.59.0" />
+<PackageReference Include="Google.Protobuf" Version="3.25.1" />
 ```
 
 ## Architecture
@@ -25,9 +32,10 @@ Cascade.Vision/
 │   └── RegionSelector.cs           # Region selection helpers
 ├── OCR/
 │   ├── IOcrEngine.cs               # OCR interface
-│   ├── WindowsOcrEngine.cs         # Windows.Media.Ocr
-│   ├── TesseractOcrEngine.cs       # Tesseract fallback
-│   ├── CompositeOcrEngine.cs       # Combined engine
+│   ├── WindowsOcrEngine.cs         # Windows.Media.Ocr (primary - fastest)
+│   ├── TesseractOcrEngine.cs       # Tesseract (secondary)
+│   ├── PaddleOcrEngine.cs          # PaddleOCR via gRPC (fallback - ViT-based)
+│   ├── CompositeOcrEngine.cs       # Smart engine orchestration
 │   ├── OcrResult.cs                # OCR result model
 │   └── OcrOptions.cs               # Configuration
 ├── Analysis/
@@ -48,6 +56,13 @@ Cascade.Vision/
 └── Services/
     ├── VisionService.cs            # Main service facade
     └── VisionOptions.cs            # Configuration
+
+python/paddle_ocr_service/
+├── __init__.py
+├── server.py                       # gRPC server hosting PaddleOCR
+├── ocr_service.py                  # Service implementation with ViTSTR/SVTR
+├── models.py                       # Model loading and management
+└── requirements.txt                # PaddlePaddle, PaddleOCR, grpcio
 ```
 
 ## Core Interfaces
@@ -199,11 +214,13 @@ public class OcrOptions
 
 public enum OcrEnginePreference
 {
-    WindowsFirst,      // Try Windows OCR, fallback to Tesseract
-    TesseractFirst,    // Try Tesseract, fallback to Windows OCR
+    WindowsFirst,      // Try Windows OCR, fallback to Tesseract, then PaddleOCR
+    TesseractFirst,    // Try Tesseract, fallback to Windows OCR, then PaddleOCR
     WindowsOnly,
     TesseractOnly,
-    BestConfidence     // Run both, use result with higher confidence
+    PaddleOcrOnly,     // Use PaddleOCR via gRPC (slowest but most powerful)
+    BestConfidence,    // Run all engines, use result with highest confidence
+    SmartFallback      // Try fast engines first, use PaddleOCR only when needed
 }
 
 public enum PageSegmentationMode
@@ -255,6 +272,271 @@ public class TesseractOcrEngine : IOcrEngine
     public string? Blacklist { get; set; }
 }
 ```
+
+## PaddleOCR Engine (Vision Transformer Fallback)
+
+PaddleOCR provides state-of-the-art OCR capabilities using Vision Transformer (ViT) based models. It runs as a separate Python gRPC service for maximum accuracy when Windows OCR and Tesseract fail to recognize text.
+
+### Architecture
+
+```
+┌─────────────────────┐         gRPC          ┌──────────────────────────┐
+│  Cascade.Vision     │ ◄──────────────────► │  Python PaddleOCR Service │
+│  (PaddleOcrEngine)  │                       │  (ViTSTR / SVTR models)   │
+└─────────────────────┘                       └──────────────────────────┘
+```
+
+### Model Options
+
+PaddleOCR supports multiple Vision Transformer-based recognition models:
+
+| Model | Description | Use Case |
+|-------|-------------|----------|
+| **ViTSTR** | Vision Transformer for Scene Text Recognition | General text, ~80% accuracy on benchmarks |
+| **SVTR** | Single Visual Model for Scene Text Recognition | Faster inference, good for real-time |
+| **PP-OCRv4** | Latest PaddleOCR model with ViT backbone | Best overall accuracy |
+
+### PaddleOcrEngine Interface
+
+```csharp
+public class PaddleOcrEngine : IOcrEngine
+{
+    // Uses PaddleOCR via gRPC service
+    // Pros: State-of-the-art accuracy, Vision Transformer based, handles difficult text
+    // Cons: Requires Python service, slower due to network call, needs GPU for best performance
+    
+    public string EngineName => "PaddleOCR";
+    
+    // gRPC connection settings
+    public string ServiceEndpoint { get; set; } = "localhost:50052";
+    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(10);
+    public bool EnableRetry { get; set; } = true;
+    public int MaxRetries { get; set; } = 3;
+    
+    // Model selection
+    public PaddleOcrModel Model { get; set; } = PaddleOcrModel.PPOCRv4;
+    
+    // Performance options
+    public bool UseGpu { get; set; } = false;
+    public int GpuMemoryLimit { get; set; } = 500; // MB
+    
+    public bool IsAvailable { get; } // Check if gRPC service is reachable
+    
+    public IReadOnlyList<string> SupportedLanguages => new[] 
+    { 
+        "en", "ch", "japan", "korean", "french", "german", 
+        "arabic", "cyrillic", "latin", "devanagari" 
+    };
+}
+
+public enum PaddleOcrModel
+{
+    ViTSTR,      // Vision Transformer - balanced
+    SVTR,        // Single Visual Model - faster
+    PPOCRv4      // Latest model - best accuracy (default)
+}
+```
+
+### PaddleOCR gRPC Service (Python)
+
+The Python service hosts PaddleOCR and exposes it via gRPC:
+
+```python
+# python/paddle_ocr_service/ocr_service.py
+
+from paddleocr import PaddleOCR
+import grpc
+from concurrent import futures
+
+class PaddleOcrServicer(vision_pb2_grpc.PaddleOcrServiceServicer):
+    def __init__(self, model='PP-OCRv4', use_gpu=False):
+        self.ocr = PaddleOCR(
+            use_angle_cls=True,
+            lang='en',
+            use_gpu=use_gpu,
+            rec_algorithm='SVTR_LCNet',  # or 'ViTSTR'
+            show_log=False
+        )
+    
+    def Recognize(self, request, context):
+        # Convert image bytes to numpy array
+        image = np.frombuffer(request.image_data, dtype=np.uint8)
+        image = cv2.imdecode(image, cv2.IMREAD_COLOR)
+        
+        # Run OCR
+        result = self.ocr.ocr(image, cls=True)
+        
+        # Build response with bounding boxes and confidence
+        return self._build_response(result)
+```
+
+### Smart Fallback Logic in CompositeOcrEngine
+
+```csharp
+public class CompositeOcrEngine : IOcrEngine
+{
+    private readonly WindowsOcrEngine _windowsOcr;
+    private readonly TesseractOcrEngine _tesseract;
+    private readonly PaddleOcrEngine _paddleOcr;
+    
+    public double ConfidenceThreshold { get; set; } = 0.7;
+    public double MinTextLengthForFallback { get; set; } = 3;
+    
+    public async Task<OcrResult> RecognizeAsync(byte[] imageData)
+    {
+        // 1. Try Windows OCR first (fastest)
+        if (_windowsOcr.IsAvailable)
+        {
+            var result = await _windowsOcr.RecognizeAsync(imageData);
+            if (IsResultAcceptable(result))
+                return result;
+        }
+        
+        // 2. Try Tesseract (fast, local)
+        var tesseractResult = await _tesseract.RecognizeAsync(imageData);
+        if (IsResultAcceptable(tesseractResult))
+            return tesseractResult;
+        
+        // 3. Fallback to PaddleOCR (slowest but most powerful)
+        if (_paddleOcr.IsAvailable)
+        {
+            var paddleResult = await _paddleOcr.RecognizeAsync(imageData);
+            return paddleResult; // Always accept PaddleOCR result as final fallback
+        }
+        
+        // Return best result from available engines
+        return tesseractResult;
+    }
+    
+    private bool IsResultAcceptable(OcrResult result)
+    {
+        // Reject if confidence too low
+        if (result.Confidence < ConfidenceThreshold)
+            return false;
+        
+        // Reject if no meaningful text found
+        if (string.IsNullOrWhiteSpace(result.FullText) || 
+            result.FullText.Length < MinTextLengthForFallback)
+            return false;
+        
+        return true;
+    }
+    
+    // Targeted fallback - use when searching for specific text
+    public async Task<OcrResult> RecognizeWithTargetAsync(byte[] imageData, string targetText)
+    {
+        // Try fast engines first
+        var result = await RecognizeAsync(imageData);
+        
+        // If target text found, return immediately
+        if (result.FindFirstWord(targetText) != null)
+            return result;
+        
+        // Target not found - try PaddleOCR as last resort
+        if (_paddleOcr.IsAvailable)
+        {
+            return await _paddleOcr.RecognizeAsync(imageData);
+        }
+        
+        return result;
+    }
+}
+```
+
+### PaddleOCR Service Proto Definition
+
+```protobuf
+// In protos/vision.proto
+
+service PaddleOcrService {
+    // Basic OCR recognition
+    rpc Recognize(PaddleOcrRequest) returns (PaddleOcrResponse);
+    
+    // Streaming for multiple images
+    rpc RecognizeBatch(stream PaddleOcrRequest) returns (stream PaddleOcrResponse);
+    
+    // Health check
+    rpc GetStatus(Empty) returns (PaddleOcrStatus);
+}
+
+message PaddleOcrRequest {
+    bytes image_data = 1;
+    string language = 2;
+    PaddleOcrModel model = 3;
+    bool use_angle_classifier = 4;
+    bool detect_only = 5;  // Only detect text regions, don't recognize
+}
+
+message PaddleOcrResponse {
+    bool success = 1;
+    string error_message = 2;
+    string full_text = 3;
+    double confidence = 4;
+    repeated PaddleOcrLine lines = 5;
+    int32 processing_time_ms = 6;
+    string model_used = 7;
+}
+
+message PaddleOcrLine {
+    string text = 1;
+    repeated PaddleOcrPoint polygon = 2;  // 4-point polygon for rotated text
+    double confidence = 3;
+    repeated PaddleOcrWord words = 4;
+}
+
+message PaddleOcrPoint {
+    int32 x = 1;
+    int32 y = 2;
+}
+
+message PaddleOcrWord {
+    string text = 1;
+    repeated PaddleOcrPoint polygon = 2;
+    double confidence = 3;
+}
+
+message PaddleOcrStatus {
+    bool is_ready = 1;
+    string model_loaded = 2;
+    bool gpu_available = 3;
+    int32 gpu_memory_used_mb = 4;
+}
+
+enum PaddleOcrModel {
+    PADDLE_OCR_MODEL_UNSPECIFIED = 0;
+    PADDLE_OCR_MODEL_VITSTR = 1;
+    PADDLE_OCR_MODEL_SVTR = 2;
+    PADDLE_OCR_MODEL_PP_OCRV4 = 3;
+}
+```
+
+### Python Service Requirements
+
+```
+# python/paddle_ocr_service/requirements.txt
+paddlepaddle>=2.5.0
+paddleocr>=2.7.0
+grpcio>=1.59.0
+grpcio-tools>=1.59.0
+protobuf>=4.24.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+```
+
+### When to Use PaddleOCR Fallback
+
+PaddleOCR is invoked automatically when:
+- Windows OCR and Tesseract both return confidence < 70%
+- No text is detected by primary engines
+- User explicitly requests PaddleOCR via `OcrEnginePreference.PaddleOcrOnly`
+- Searching for specific text that isn't found by faster engines
+
+Benefits of Vision Transformer models:
+- Better handling of rotated/skewed text
+- Superior scene text recognition (text in photos)
+- Multi-language support with single model
+- Handles low-contrast and degraded images better
 
 ## Visual Element Analysis
 
@@ -487,6 +769,9 @@ public class VisionOptions
     public OcrOptions DefaultOcrOptions { get; set; } = new();
     public string? TesseractDataPath { get; set; }
     
+    // PaddleOCR gRPC service options
+    public PaddleOcrOptions PaddleOcr { get; set; } = new();
+    
     // Change detection
     public ComparisonOptions DefaultComparisonOptions { get; set; } = new();
     
@@ -497,6 +782,28 @@ public class VisionOptions
     // Logging
     public bool SaveDebugImages { get; set; } = false;
     public string? DebugImagePath { get; set; }
+}
+
+public class PaddleOcrOptions
+{
+    // gRPC connection
+    public string ServiceEndpoint { get; set; } = "localhost:50052";
+    public TimeSpan ConnectionTimeout { get; set; } = TimeSpan.FromSeconds(5);
+    public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    
+    // Retry policy
+    public bool EnableRetry { get; set; } = true;
+    public int MaxRetries { get; set; } = 3;
+    public TimeSpan RetryDelay { get; set; } = TimeSpan.FromMilliseconds(500);
+    
+    // Model configuration
+    public PaddleOcrModel DefaultModel { get; set; } = PaddleOcrModel.PPOCRv4;
+    public string DefaultLanguage { get; set; } = "en";
+    public bool UseAngleClassifier { get; set; } = true;
+    
+    // Fallback behavior
+    public double FallbackConfidenceThreshold { get; set; } = 0.7;
+    public bool EnableAutoFallback { get; set; } = true;
 }
 ```
 
