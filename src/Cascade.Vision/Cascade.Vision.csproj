@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Cascade.Vision</RootNamespace>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Description>Vision and OCR capabilities for Cascade</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.SDK.Contracts" Version="10.0.22621.755" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+    <PackageReference Include="Tesseract" Version="5.2.0" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cascade.Core\Cascade.Core.csproj" />
+    <ProjectReference Include="..\Cascade.UIAutomation\Cascade.UIAutomation.csproj" />
+  </ItemGroup>
+
+</Project>
+
+

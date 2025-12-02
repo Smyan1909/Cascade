@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package cascade;
+
+option csharp_namespace = "Cascade.Grpc";
+
+// Common result wrapper
+message Result {
+    bool success = 1;
+    string error_message = 2;
+    string error_code = 3;
+}
+
+// Rectangle for bounding boxes
+message Rectangle {
+    int32 x = 1;
+    int32 y = 2;
+    int32 width = 3;
+    int32 height = 4;
+}
+
+// Point coordinates
+message Point {
+    int32 x = 1;
+    int32 y = 2;
+}
+
+// Timestamp
+message Timestamp {
+    int64 seconds = 1;
+    int32 nanos = 2;
+}
+
+// Key-value pair for metadata
+message KeyValue {
+    string key = 1;
+    string value = 2;
+}
+
+// Empty message for requests with no parameters
+message Empty {}
+
+

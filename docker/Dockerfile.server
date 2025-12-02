@@ -1,0 +1,52 @@
+# Build stage
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+# Copy project files
+COPY src/*.sln ./
+COPY src/Cascade.Core/*.csproj Cascade.Core/
+COPY src/Cascade.UIAutomation/*.csproj Cascade.UIAutomation/
+COPY src/Cascade.Vision/*.csproj Cascade.Vision/
+COPY src/Cascade.CodeGen/*.csproj Cascade.CodeGen/
+COPY src/Cascade.Database/*.csproj Cascade.Database/
+COPY src/Cascade.Grpc.Server/*.csproj Cascade.Grpc.Server/
+
+# Copy proto files
+COPY protos/ ../protos/
+
+# Restore dependencies
+RUN dotnet restore Cascade.Grpc.Server/Cascade.Grpc.Server.csproj
+
+# Copy source code
+COPY src/ ./
+
+# Build and publish
+RUN dotnet publish Cascade.Grpc.Server/Cascade.Grpc.Server.csproj \
+    -c Release -o /app/publish
+
+# Runtime stage
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+WORKDIR /app
+
+# Install dependencies for OCR
+RUN apt-get update && apt-get install -y \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy published application
+COPY --from=build /app/publish .
+
+# Configuration
+ENV ASPNETCORE_URLS=http://+:50051
+ENV CASCADE_DATABASE__PROVIDER=PostgreSQL
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:50051/health || exit 1
+
+EXPOSE 50051
+
+ENTRYPOINT ["dotnet", "Cascade.Grpc.Server.dll"]
+
+
