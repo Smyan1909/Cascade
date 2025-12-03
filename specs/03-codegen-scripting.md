@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `Cascade.CodeGen` module provides dynamic C# code generation, compilation, and execution capabilities. It enables the system to generate UI automation scripts at runtime, compile them using Roslyn, and execute them in a sandboxed environment.
+The `Cascade.CodeGen` module provides dynamic C# code generation, compilation, and execution capabilities. Generated scripts are **session-aware**: every template emits code that accepts a `SessionHandle` and routes UIAutomation calls to the hidden virtual desktop so the user’s physical desktop remains untouched. Roslyn compilation plus sandboxed execution ensures that automation can run safely inside isolated sessions.
 
 ## Dependencies
 
@@ -57,6 +57,13 @@ Cascade.CodeGen/
     ├── CodeGenService.cs           # Main service facade
     └── CodeGenOptions.cs           # Configuration
 ```
+
+## Session-Aware Code Generation
+
+- All templates receive an `AutomationCallContext` containing `SessionHandle Session`, `VirtualInputProfile InputProfile`, and `Guid RunId`.
+- Generated methods call UIAutomation/vision services through that context, ensuring every RPC carries the correct session identifier.
+- Scripts cannot run without a session; the executor enforces this at runtime and emits clear diagnostics if a session expired or is unavailable.
+- CodeGen also injects boilerplate to reacquire a session when a retry policy indicates the hidden desktop was recycled.
 
 ## Core Interfaces
 
@@ -113,11 +120,16 @@ namespace {{ namespace }}
     {
         private readonly IElementDiscovery _discovery;
         private readonly IActionExecutor _executor;
+        private readonly AutomationCallContext _context;
         
-        public {{ class_name }}(IElementDiscovery discovery, IActionExecutor executor)
+        public {{ class_name }}(
+            IElementDiscovery discovery,
+            IActionExecutor executor,
+            AutomationCallContext context)
         {
             _discovery = discovery;
             _executor = executor;
+            _context = context;
         }
         
         {{ for action in actions }}
@@ -276,6 +288,12 @@ public static class DefaultReferences
 ### IScriptExecutor
 
 ```csharp
+public sealed record AutomationCallContext(
+    SessionHandle Session,
+    VirtualInputProfile InputProfile,
+    Guid RunId,
+    CancellationToken Cancellation);
+
 public interface IScriptExecutor
 {
     // Execute compiled assembly
@@ -283,6 +301,7 @@ public interface IScriptExecutor
         CompilationResult compilation, 
         string typeName, 
         string methodName,
+        AutomationCallContext callContext,
         ExecutionContext? context = null);
     
     // Execute with parameters
@@ -291,11 +310,13 @@ public interface IScriptExecutor
         string typeName,
         string methodName,
         object?[]? parameters = null,
+        AutomationCallContext? callContext = null,
         ExecutionContext? context = null);
     
     // Execute inline script
     Task<ExecutionResult> ExecuteScriptAsync(
         string script,
+        AutomationCallContext callContext,
         ExecutionContext? context = null);
     
     // Cancellation
@@ -309,6 +330,8 @@ public interface IScriptExecutor
 public class ExecutionContext
 {
     public Guid ExecutionId { get; } = Guid.NewGuid();
+    public SessionHandle Session { get; set; }
+    public VirtualInputProfile InputProfile { get; set; } = VirtualInputProfile.Balanced;
     
     // Services available to scripts
     public IServiceProvider Services { get; set; }
@@ -414,6 +437,12 @@ public class SecurityPolicy
     };
 }
 ```
+
+## Session Safety & Retry Strategy
+
+- **Context Injection**: Script templates require an `AutomationCallContext`; missing sessions cause generation-time validation errors.
+- **Auto-Retry Hooks**: The executor inspects `SessionExpired` exceptions and can trigger a user-configurable retry that reacquires a fresh session before replaying pending steps.
+- **Audit Fields**: `AutomationCallContext.RunId` and `Session.SessionId` are logged with every script invocation so analysts can reconstruct automation sequences without exposing the user’s foreground desktop.
 
 ## Code Generation
 
@@ -682,6 +711,8 @@ public class CodeGenOptions
     // Execution
     public SecurityPolicy DefaultSecurityPolicy { get; set; } = SecurityPolicy.Default;
     public TimeSpan DefaultTimeout { get; set; } = TimeSpan.FromMinutes(5);
+    public bool RequireSessionContext { get; set; } = true;
+    public bool AllowSessionRetry { get; set; } = true;
     
     // Code generation
     public string DefaultNamespace { get; set; } = "Cascade.Generated";
@@ -710,11 +741,23 @@ var compilation = await compiler.CompileAsync(generatedCode.SourceCode);
 if (compilation.Success)
 {
     var executor = new SandboxedExecutor();
+    var sessionHandle = await sessionService.AttachAsync(new AttachSessionRequest { AgentId = agentId });
+    var callContext = new AutomationCallContext(
+        sessionHandle,
+        VirtualInputProfile.Balanced,
+        Guid.NewGuid(),
+        CancellationToken.None);
+
     var result = await executor.ExecuteAsync(
         compilation,
         "Cascade.Generated.ClickSubmitButton",
         "ExecuteAsync",
-        new ExecutionContext { ElementDiscovery = discovery });
+        callContext,
+        new ExecutionContext 
+        { 
+            ElementDiscovery = discovery,
+            Session = sessionHandle
+        });
     
     Console.WriteLine($"Execution completed: {result.Success}");
 }
@@ -744,6 +787,13 @@ await scriptRepository.SaveAsync(new ScriptRecord
 
 ### Execute Script with Variables
 ```csharp
+var sessionHandle = await sessionService.AttachAsync(new AttachSessionRequest { AgentId = agentId });
+var callContext = new AutomationCallContext(
+    sessionHandle,
+    VirtualInputProfile.LowLatency,
+    Guid.NewGuid(),
+    CancellationToken.None);
+
 var context = new ExecutionContext
 {
     Variables = new Dictionary<string, object>
@@ -752,7 +802,8 @@ var context = new ExecutionContext
         ["password"] = "testpass"
     },
     ElementDiscovery = discovery,
-    SecurityPolicy = SecurityPolicy.Default
+    SecurityPolicy = SecurityPolicy.Default,
+    Session = sessionHandle
 };
 
 var script = @"
@@ -770,7 +821,7 @@ var script = @"
     await submitButton.ClickAsync();
 ";
 
-var result = await executor.ExecuteScriptAsync(script, context);
+var result = await executor.ExecuteScriptAsync(script, callContext, context);
 ```
 
 

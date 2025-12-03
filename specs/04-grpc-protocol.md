@@ -16,6 +16,7 @@ The `Cascade.Grpc.Server` module defines the communication protocol between the 
 ```
 protos/
 ├── cascade.proto              # Common types and enums
+├── session.proto              # Hidden desktop session orchestration
 ├── ui_automation.proto        # UI Automation service
 ├── vision.proto               # Vision/OCR service
 ├── codegen.proto              # Code generation service
@@ -80,9 +81,97 @@ message KeyValue {
     string key = 1;
     string value = 2;
 }
+
+// Session context propagated with every automation call
+message SessionContext {
+    string session_id = 1;
+    string agent_id = 2;
+    string run_id = 3;
+}
+```
+
+### session.proto (Hidden Desktop Sessions)
+
+```protobuf
+syntax = "proto3";
+
+package cascade.session;
+
+import "cascade.proto";
+
+option csharp_namespace = "Cascade.Grpc.Session";
+
+service SessionService {
+    rpc CreateSession(CreateSessionRequest) returns (SessionResponse);
+    rpc AttachSession(AttachSessionRequest) returns (SessionResponse);
+    rpc ReleaseSession(ReleaseSessionRequest) returns (cascade.Result);
+    rpc Heartbeat(SessionHeartbeatRequest) returns (SessionResponse);
+    rpc StreamEvents(SessionEventRequest) returns (stream SessionEvent);
+}
+
+message CreateSessionRequest {
+    string agent_id = 1;
+    string run_id = 2;
+    VirtualDesktopProfile profile = 3;
+}
+
+message AttachSessionRequest {
+    string session_id = 1;
+    string agent_id = 2;
+}
+
+message ReleaseSessionRequest {
+    string session_id = 1;
+    string reason = 2;
+}
+
+message SessionHeartbeatRequest {
+    string session_id = 1;
+    SessionMetrics metrics = 2;
+}
+
+message SessionResponse {
+    cascade.Result result = 1;
+    SessionContext session = 2;
+    VirtualDesktopProfile profile = 3;
+    SessionState state = 4;
+}
+
+message SessionEventRequest {
+    string agent_id = 1;
+}
+
+message SessionEvent {
+    SessionContext session = 1;
+    SessionState state = 2;
+    string message = 3;
+}
+
+enum SessionState {
+    SESSION_STATE_UNSPECIFIED = 0;
+    SESSION_READY = 1;
+    SESSION_IN_USE = 2;
+    SESSION_DRAINING = 3;
+    SESSION_TERMINATED = 4;
+}
+
+message VirtualDesktopProfile {
+    int32 width = 1;
+    int32 height = 2;
+    int32 dpi = 3;
+    bool enable_gpu = 4;
+}
+
+message SessionMetrics {
+    double cpu_percent = 1;
+    double memory_percent = 2;
+    double input_latency_ms = 3;
+}
 ```
 
 ### ui_automation.proto
+
+> **Session Field**: All request messages include `SessionContext session = 100;` (omitted in the listings below for brevity). The backend rejects any automation call without a valid session.
 
 ```protobuf
 syntax = "proto3";
@@ -315,6 +404,8 @@ enum ToggleState {
 
 ### vision.proto
 
+> All capture/OCR requests embed `SessionContext session = 100;` so the service can attach to the correct hidden desktop.
+
 ```protobuf
 syntax = "proto3";
 
@@ -509,6 +600,8 @@ message VisualElement {
 
 ### codegen.proto
 
+> Script execution requests include both `SessionContext` and `AutomationCallContext` metadata so the backend knows which hidden desktop to target.
+
 ```protobuf
 syntax = "proto3";
 
@@ -690,6 +783,8 @@ message Script {
 ```
 
 ### agent.proto
+
+> Agent execution and history mutations carry `SessionContext` values so that runs can be audited per hidden desktop.
 
 ```protobuf
 syntax = "proto3";

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Agent Runtime module provides the infrastructure for loading, executing, and managing specialized agents created by the Builder Agent. It handles dynamic agent loading from the database, execution context management, conversation state, and error recovery.
+The Agent Runtime module provides the infrastructure for loading, executing, and managing specialized agents created by the Builder Agent. All executions occur inside hidden Windows Virtual Desktop sessions so users can continue interacting with their desktops while agents run.
 
 ## Architecture
 
@@ -32,6 +32,12 @@ python/cascade_agent/runtime/
     └── task_result.py
 ```
 
+## Session Orchestration
+
+- `RuntimeSessionManager` talks to the gRPC `SessionService` to acquire, heartbeat, and release hidden desktop sessions.
+- Each execution receives a unique `SessionHandle` that is injected into the `ExecutionContext`, loaded tools, and downstream CodeGen scripts.
+- Sessions can be pooled or per-request; the runtime refuses to run automation without an active session, ensuring the user’s desktop stays untouched.
+
 ## Agent Loading
 
 ### AgentLoader
@@ -56,6 +62,7 @@ class LoadedAgent:
     tools: list[callable]
     graph: Optional[StateGraph]
     metadata: dict
+    session_profile: Optional[VirtualDesktopProfile] = None
 
 
 class AgentLoader:
@@ -101,7 +108,8 @@ class AgentLoader:
             python_module=python_module,
             tools=tools,
             graph=graph,
-            metadata=agent_def["agent"].get("metadata", {})
+            metadata=agent_def["agent"].get("metadata", {}),
+            session_profile=agent_def["agent"].get("session_profile")
         )
         
         self._loaded_agents[loaded_agent.id] = loaded_agent
@@ -241,6 +249,7 @@ class ExecutionContext:
     agent_id: str = ""
     user_id: Optional[str] = None
     session_id: Optional[str] = None
+    session_handle: Optional[SessionHandle] = None
     
     # Task
     task: str = ""
@@ -333,6 +342,8 @@ class RuntimeState(TypedDict):
     # Agent context
     agent: LoadedAgent
     context: ExecutionContext
+    session_handle: Optional[SessionHandle]
+    session_state: str
     
     # Error handling
     error: Optional[str]
@@ -351,9 +362,10 @@ class RuntimeState(TypedDict):
 class AgentExecutor:
     """Executes loaded agents with task management."""
     
-    def __init__(self, loader: AgentLoader, llm_provider):
+    def __init__(self, loader: AgentLoader, llm_provider, session_client):
         self.loader = loader
         self.llm = llm_provider
+        self.session_client = session_client
         self._active_executions: dict[str, ExecutionContext] = {}
     
     async def execute(
@@ -381,8 +393,14 @@ class AgentExecutor:
         )
         
         self._active_executions[context.execution_id] = context
+        acquired_session = None
         
         try:
+            session_handle = await self._ensure_session(agent, session_id)
+            acquired_session = session_handle if session_id is None else None
+            context.session_id = session_handle.session_id
+            context.session_handle = session_handle
+            
             # Initialize state
             initial_state = RuntimeState(
                 messages=[HumanMessage(content=task)],
@@ -398,6 +416,8 @@ class AgentExecutor:
                 accumulated_results=[],
                 agent=agent,
                 context=context,
+                session_handle=session_handle,
+                session_state="active",
                 error=None,
                 error_count=0,
                 recovery_strategy=None,
@@ -447,6 +467,8 @@ class AgentExecutor:
         
         finally:
             del self._active_executions[context.execution_id]
+            if acquired_session:
+                await self.session_client.release_session(acquired_session.session_id, reason="runtime_complete")
     
     async def _record_execution(self, context: ExecutionContext, state: RuntimeState):
         """Record execution history to database."""
@@ -479,6 +501,16 @@ class AgentExecutor:
         if execution_id in self._active_executions:
             return self._active_executions[execution_id].to_dict()
         return None
+
+    async def _ensure_session(self, agent: LoadedAgent, session_id: Optional[str]) -> SessionHandle:
+        if session_id:
+            return await self.session_client.attach_session(session_id)
+        
+        profile = agent.session_profile or VirtualDesktopProfile(width=1920, height=1080, dpi=100, enable_gpu=False)
+        response = await self.session_client.create_session(agent_id=agent.id, profile=profile)
+        if not response.result.success:
+            raise RuntimeError(f"Unable to create session: {response.result.error_message}")
+        return response.session
 
 
 @dataclass
@@ -660,6 +692,12 @@ async def clarify_with_user_node(state: RuntimeState) -> dict:
         "messages": [AIMessage(content=f"I need some clarification: {clarification_needed}")]
     }
 ```
+
+## Session Safety & User Concurrency
+
+- Runtime pauses automation if the session host detects the user has taken manual control, ensuring no fighting over windows.
+- Heartbeats are sent every 5 seconds; missing three heartbeats triggers automatic retries with a new session while preserving state checkpoints.
+- When the specialized agent finishes, the runtime releases the session so the user can immediately continue working in the foreground application.
 
 ## Conversation Memory
 

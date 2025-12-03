@@ -2,13 +2,15 @@
 
 ## Overview
 
-The `Cascade.UIAutomation` module provides a high-level wrapper around Microsoft UI Automation (UIA) framework, enabling programmatic discovery and interaction with Windows application UI elements.
+The `Cascade.UIAutomation` module provides a high-level wrapper around Microsoft UI Automation (UIA) framework, enabling programmatic discovery and interaction with Windows application UI elements. All automation happens inside hidden Windows Virtual Desktop sessions using virtual keyboard/mouse devices so the user’s physical desktop remains untouched while agents explore or execute tasks.
 
 ## Dependencies
 
 ```xml
 <PackageReference Include="Microsoft.Windows.SDK.Contracts" Version="10.0.22621.755" />
 <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+<PackageReference Include="Vanara.PInvoke.VirtualDesktop" Version="3.4.14" />
+<PackageReference Include="WindowsInput" Version="9.0.0" />
 ```
 
 ## Architecture
@@ -20,6 +22,14 @@ Cascade.UIAutomation/
 │   ├── UIElement.cs            # Concrete implementation
 │   ├── ElementFactory.cs       # Element creation
 │   └── ElementCache.cs         # Caching layer
+├── Session/
+│   ├── SessionHandle.cs        # Hidden desktop session token
+│   ├── SessionContext.cs       # Ambient session data
+│   └── SessionRouter.cs        # Routes calls to correct desktop
+├── Input/
+│   ├── IVirtualInputProvider.cs # Virtual mouse/keyboard abstraction
+│   ├── VirtualMouse.cs         # HID injection
+│   └── VirtualKeyboard.cs      # HID injection
 ├── Actions/
 │   ├── IActionExecutor.cs      # Action interface
 │   ├── ClickAction.cs          # Mouse click operations
@@ -53,6 +63,28 @@ Cascade.UIAutomation/
     └── UIAutomationOptions.cs  # Configuration
 ```
 
+## Session Context & Hidden Desktop Integration
+
+- Every `Cascade.UIAutomation` service instance is **session-bound**. A `SessionHandle` identifies the hidden Windows Virtual Desktop, virtual display, and input pipeline used for automation.
+- Sessions are provisioned by the Session Orchestrator; UIAutomation simply consumes the handle and routes all UIA calls through the correct desktop.
+- The module uses virtual HID drivers so mouse/keyboard events never reach the user’s physical devices.
+
+```csharp
+public sealed record SessionHandle(
+    Guid SessionId,
+    IntPtr VirtualDesktopId,
+    string UserProfilePath);
+
+public interface ISessionContextAccessor
+{
+    SessionHandle Session { get; }
+    VirtualInputChannel InputChannel { get; }
+    IAutomationElement RootElement { get; }
+}
+```
+
+> **Concurrency**: Multiple sessions can be active simultaneously. Each `SessionHandle` carries throttling metadata so the backend can pause automation without affecting other sessions or the end user.
+
 ## Core Interfaces
 
 ### IUIElement
@@ -60,6 +92,10 @@ Cascade.UIAutomation/
 ```csharp
 public interface IUIElement
 {
+    // Session context
+    SessionHandle Session { get; }
+    VirtualInputChannel InputChannel { get; }
+
     // Identity
     string AutomationId { get; }
     string Name { get; }
@@ -103,6 +139,8 @@ public interface IUIElement
 ```
 
 ### IElementDiscovery
+
+> All discovery operations are implicitly scoped to the `SessionHandle` supplied when the service is resolved. The interface remains simple while providing overloads that accept an explicit handle when needed.
 
 ```csharp
 public interface IElementDiscovery
@@ -206,6 +244,26 @@ public class ElementLocator
 // "/Window/Pane/Edit[@ClassName='TextBox'][1]"
 ```
 
+## Virtual Input Provider
+
+All user actions (clicks, typing, scrolling) are executed through a `IVirtualInputProvider` that is bound to the session’s virtual desktop. This guarantees:
+- No physical mouse/keyboard hijacking.
+- Pointer coordinates are mapped to the hidden desktop resolution.
+- Input latency and retries can be tuned per session.
+
+```csharp
+public interface IVirtualInputProvider
+{
+    SessionHandle Session { get; }
+
+    Task MoveMouseAsync(Point screenPoint);
+    Task ClickAsync(MouseButton button, ClickOptions? options = null);
+    Task TypeTextAsync(string text, TextEntryOptions? options = null);
+    Task SendVirtualKeyAsync(VirtualKey key, KeySendOptions? options = null);
+    Task ScrollAsync(int delta, ScrollOptions? options = null);
+}
+```
+
 ## UI Patterns
 
 ### InvokePattern
@@ -303,11 +361,15 @@ public interface IWindowManager
 }
 ```
 
+> Window state changes are applied **inside the hidden desktop**. Bringing a window to the foreground means activating it within the virtual session, not the user’s actual desktop. When needed, the orchestrator can mirror the final window position back to the user workspace after automation completes.
+
 ## Element Caching
 
 ```csharp
 public class ElementCache
 {
+    public SessionHandle Session { get; }
+
     // Cache configuration
     public TimeSpan DefaultCacheDuration { get; set; } = TimeSpan.FromSeconds(5);
     public int MaxCachedElements { get; set; } = 1000;
@@ -366,6 +428,7 @@ public class UIAutomationOptions
     // Timeouts
     public TimeSpan DefaultTimeout { get; set; } = TimeSpan.FromSeconds(30);
     public TimeSpan ElementWaitPollingInterval { get; set; } = TimeSpan.FromMilliseconds(100);
+    public TimeSpan SessionAcquireTimeout { get; set; } = TimeSpan.FromSeconds(15);
     
     // Caching
     public bool EnableCaching { get; set; } = true;
@@ -378,10 +441,21 @@ public class UIAutomationOptions
     // Actions
     public int DefaultClickDelay { get; set; } = 50;
     public int DefaultTypeDelay { get; set; } = 20;
+    public VirtualInputProfile InputProfile { get; set; } = VirtualInputProfile.Balanced;
     
     // Retry
     public int MaxRetryAttempts { get; set; } = 3;
     public TimeSpan RetryDelay { get; set; } = TimeSpan.FromMilliseconds(500);
+    
+    // Session reuse
+    public bool AllowSessionReuse { get; set; } = true;
+}
+
+public enum VirtualInputProfile
+{
+    LowLatency,
+    Balanced,
+    HighThroughput
 }
 ```
 
@@ -404,11 +478,31 @@ public enum UIAutomationErrorCode
     Timeout,
     ProcessNotFound,
     WindowNotFound,
-    InvalidOperation
+    InvalidOperation,
+    SessionUnavailable,
+    SessionExpired
 }
 ```
 
 ## Usage Examples
+
+### Acquiring a session-scoped UIAutomation client
+```csharp
+// sessionService comes from Cascade.Grpc.SessionService
+var sessionHandle = await sessionService.AttachAsync(new AttachSessionRequest
+{
+    AgentId = agentId,
+    PreferredResolution = new Resolution { Width = 1920, Height = 1080 }
+});
+
+var sessionContext = new SessionContext(sessionHandle);
+var discovery = new ElementDiscovery(sessionContext);
+
+// All subsequent calls run inside the hidden desktop and use virtual input
+var calcWindow = await discovery.WaitForElementAsync(
+    SearchCriteria.ByName("Calculator"),
+    TimeSpan.FromSeconds(5));
+```
 
 ### Finding and clicking a button
 ```csharp
@@ -451,5 +545,12 @@ if (textBox.TryGetPattern<IValuePattern>(out var valuePattern))
 3. **Use Control View**: Faster than Raw View, excludes non-interactive elements
 4. **Batch operations**: Group related operations to minimize round-trips
 5. **Prefer AutomationId**: Faster than name-based searches when available
+
+## Session Routing & Safety
+
+- **One Service per Session**: Services are created via `IServiceProvider.GetRequiredService<UIAutomationService>(SessionHandle)` so there is no accidental cross-session state bleed.
+- **Virtual Input Backpressure**: `IVirtualInputProvider` enforces rate limits to keep the hidden desktop responsive and prevents starved user sessions.
+- **Session Failover**: When the virtual desktop crashes, the `SessionRouter` signals `SessionExpired`, allowing agents to reacquire a fresh handle without user intervention.
+- **User Concurrency**: Because all input/output is virtualized, the end user can continue working on the foreground desktop while automation proceeds in the background.
 
 

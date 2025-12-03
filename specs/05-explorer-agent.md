@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Explorer Agent is a LangGraph-based agent responsible for understanding Windows applications through systematic UI exploration. It takes an application and instruction manual as input, then discovers, tests, and documents all UI elements and their interactions.
+The Explorer Agent is a LangGraph-based agent responsible for understanding Windows applications through systematic UI exploration. It operates solely inside a hidden Windows Virtual Desktop session so users can continue using their foreground desktop while exploration runs.
 
 ## Architecture
 
@@ -35,6 +35,13 @@ python/cascade_agent/explorer/
     └── action_result.py
 ```
 
+## Hidden Desktop Session Management
+
+- Explorer requests a hidden desktop session before parsing instructions.
+- Session usage is reference-counted so multiple explorer runs cannot collide.
+- All tool calls (`ui_client`, `vision_client`) automatically include the session token provided by `prepare_session_node`.
+- Upon completion or fatal error, the agent releases the session so the user can immediately take control of the application on their own desktop.
+
 ## Agent State
 
 ```python
@@ -46,6 +53,11 @@ class ExplorerState(TypedDict):
     target_application: str
     instruction_manual: str
     exploration_goals: list[str]
+    
+    # Session
+    session_handle: Optional[SessionHandle]
+    session_state: str  # ready, draining, released
+    allow_user_concurrency: bool
     
     # Messages
     messages: Annotated[list, add_messages]
@@ -147,6 +159,7 @@ def create_explorer_graph() -> StateGraph:
     workflow = StateGraph(ExplorerState)
     
     # Add nodes
+    workflow.add_node("prepare_session", prepare_session_node)
     workflow.add_node("parse_instructions", parse_instructions_node)
     workflow.add_node("create_plan", create_plan_node)
     workflow.add_node("select_next_goal", select_next_goal_node)
@@ -159,7 +172,8 @@ def create_explorer_graph() -> StateGraph:
     workflow.add_node("tools", ToolNode(tools=get_explorer_tools()))
     
     # Set entry point
-    workflow.set_entry_point("parse_instructions")
+    workflow.set_entry_point("prepare_session")
+    workflow.add_edge("prepare_session", "parse_instructions")
     
     # Add edges
     workflow.add_edge("parse_instructions", "create_plan")
@@ -214,6 +228,23 @@ def create_explorer_graph() -> StateGraph:
 ### Planning Nodes
 
 ```python
+async def prepare_session_node(state: ExplorerState) -> dict:
+    """Acquire or attach to a hidden desktop session."""
+    
+    if state.get("session_handle"):
+        return {}
+    
+    response = await session_client.attach_or_create(
+        agent_id=state["target_application"],
+        allow_user_concurrency=True)
+    
+    return {
+        "session_handle": response.session,
+        "session_state": response.state,
+        "messages": [AIMessage(content=f"Session {response.session.session_id} ready")]
+    }
+
+
 async def parse_instructions_node(state: ExplorerState) -> dict:
     """Parse the instruction manual and extract exploration goals."""
     
@@ -478,6 +509,9 @@ async def synthesize_knowledge_node(state: ExplorerState) -> dict:
         workflows=extract_workflows(state),
         navigation_graph=build_navigation_graph(state["navigation_paths"])
     )
+    
+    if state.get("session_handle"):
+        await session_client.release(state["session_handle"].session_id, reason="exploration_complete")
     
     return {
         "application_model": application_model,

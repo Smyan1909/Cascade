@@ -297,6 +297,42 @@ public class ExecutionStep
 }
 ```
 
+### AutomationSession Entity
+
+```csharp
+public class AutomationSession
+{
+    public Guid Id { get; set; }
+    public string SessionId { get; set; } = string.Empty;
+    public Guid AgentId { get; set; }
+    public Guid? ExecutionRecordId { get; set; }
+    public string RunId { get; set; } = string.Empty;
+    public VirtualDesktopProfile Profile { get; set; } = new();
+    public SessionState State { get; set; } = SessionState.Active;
+    public DateTime CreatedAt { get; set; }
+    public DateTime? ReleasedAt { get; set; }
+    
+    public ICollection<SessionEvent> Events { get; set; } = new List<SessionEvent>();
+}
+
+public class SessionEvent
+{
+    public Guid Id { get; set; }
+    public Guid SessionId { get; set; }
+    public string EventType { get; set; } = string.Empty; // Created, HeartbeatMissed, Released, etc.
+    public string Payload { get; set; } = string.Empty;
+    public DateTime OccurredAt { get; set; }
+}
+
+public enum SessionState
+{
+    Active,
+    Draining,
+    Released,
+    Failed
+}
+```
+
 ### Configuration Entity
 
 ```csharp
@@ -474,6 +510,33 @@ CREATE TABLE execution_steps (
 
 CREATE INDEX idx_execution_steps_execution ON execution_steps(execution_id);
 
+-- Automation sessions table
+CREATE TABLE automation_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id VARCHAR(64) NOT NULL,
+    agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    execution_record_id UUID REFERENCES execution_records(id) ON DELETE SET NULL,
+    run_id VARCHAR(64),
+    profile JSONB NOT NULL,
+    state VARCHAR(32) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    released_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE UNIQUE INDEX idx_automation_sessions_session ON automation_sessions(session_id);
+CREATE INDEX idx_automation_sessions_agent ON automation_sessions(agent_id);
+
+-- Session events table
+CREATE TABLE session_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    automation_session_id UUID NOT NULL REFERENCES automation_sessions(id) ON DELETE CASCADE,
+    event_type VARCHAR(64) NOT NULL,
+    payload JSONB,
+    occurred_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_session_events_session ON session_events(automation_session_id);
+
 -- Configuration table
 CREATE TABLE configurations (
     key VARCHAR(255) PRIMARY KEY,
@@ -540,6 +603,15 @@ public interface IExecutionRepository
     Task<ExecutionRecord?> GetExecutionAsync(Guid id);
     Task<int> GetTotalExecutionsAsync(Guid agentId);
 }
+
+public interface ISessionRepository
+{
+    Task<AutomationSession> CreateAsync(AutomationSession session);
+    Task<AutomationSession?> GetBySessionIdAsync(string sessionId);
+    Task UpdateStateAsync(string sessionId, SessionState newState);
+    Task AddEventAsync(SessionEvent evt);
+    Task ReleaseAsync(string sessionId, string reason);
+}
 ```
 
 ## Database Context
@@ -555,6 +627,8 @@ public class CascadeDbContext : DbContext
     public DbSet<ExplorationResult> ExplorationResults => Set<ExplorationResult>();
     public DbSet<ExecutionRecord> ExecutionRecords => Set<ExecutionRecord>();
     public DbSet<ExecutionStep> ExecutionSteps => Set<ExecutionStep>();
+    public DbSet<AutomationSession> AutomationSessions => Set<AutomationSession>();
+    public DbSet<SessionEvent> SessionEvents => Set<SessionEvent>();
     public DbSet<Configuration> Configurations => Set<Configuration>();
     
     public CascadeDbContext(DbContextOptions<CascadeDbContext> options) : base(options)
@@ -607,6 +681,9 @@ public class DatabaseOptions
     public string? Username { get; set; }
     public string? Password { get; set; }
     public bool UseSsl { get; set; } = true;
+    
+    // Session retention
+    public TimeSpan SessionLogRetention { get; set; } = TimeSpan.FromDays(30);
     
     // Migration
     public bool AutoMigrate { get; set; } = true;

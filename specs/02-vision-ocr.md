@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `Cascade.Vision` module provides visual analysis capabilities including screenshot capture, OCR (Optical Character Recognition), visual element detection, and change detection. This module complements UI Automation by handling scenarios where programmatic element access is limited.
+The `Cascade.Vision` module provides visual analysis capabilities including screenshot capture, OCR (Optical Character Recognition), visual element detection, and change detection. All capture happens inside hidden Windows Virtual Desktop sessions so agents can analyze UI that is not visible on the user’s primary desktop. This module complements UI Automation by handling scenarios where programmatic element access is limited while keeping the user in control of their workspace.
 
 The OCR system uses a tiered approach optimized for speed:
 1. **Windows OCR** (Primary) - Fastest, built-in Windows 10+ engine
@@ -65,6 +65,13 @@ python/paddle_ocr_service/
 └── requirements.txt                # PaddlePaddle, PaddleOCR, grpcio
 ```
 
+## Session-Scoped Capture Pipeline
+
+- `IScreenCapture` instances are **session-aware**. The Session Orchestrator provides a `SessionHandle` and off-screen swap chain pointer so capture never interferes with the primary desktop.
+- The capture stack uses a virtual display driver or Windows Desktop Duplication API bound to the hidden desktop to stream frames to memory.
+- Cursor overlays and window bounds are derived from session-specific UIA metadata, ensuring coordinates stay consistent with virtual input.
+- OCR requests include the `SessionId` so downstream audit logs can correlate text extracts with the exact automation run.
+
 ## Core Interfaces
 
 ### IScreenCapture
@@ -72,6 +79,8 @@ python/paddle_ocr_service/
 ```csharp
 public interface IScreenCapture
 {
+    SessionHandle Session { get; }
+
     // Full screen capture
     Task<CaptureResult> CaptureScreenAsync(int screenIndex = 0);
     Task<CaptureResult> CaptureAllScreensAsync();
@@ -98,6 +107,7 @@ public interface IScreenCapture
 ```csharp
 public class CaptureResult
 {
+    public Guid SessionId { get; set; }
     public byte[] ImageData { get; set; }
     public string ImageFormat { get; set; } // "png", "jpeg", "bmp"
     public int Width { get; set; }
@@ -128,6 +138,7 @@ public class CaptureOptions
     public Rectangle? CropRegion { get; set; }
     public bool RemoveTransparency { get; set; } = true;
     public Color TransparencyReplacement { get; set; } = Color.White;
+    public bool UseVirtualDisplayDuplication { get; set; } = true;
 }
 ```
 
@@ -764,6 +775,8 @@ public class VisionOptions
 {
     // Screenshot options
     public CaptureOptions DefaultCaptureOptions { get; set; } = new();
+    public bool ForceHiddenDesktopCapture { get; set; } = true;
+    public TimeSpan SessionFrameTimeout { get; set; } = TimeSpan.FromSeconds(2);
     
     // OCR options
     public OcrOptions DefaultOcrOptions { get; set; } = new();
@@ -829,7 +842,7 @@ public class HybridElementFinder
             return new HybridElement(uiaElement);
         
         // 2. Fallback to OCR
-        var capture = await _screenCapture.CaptureForegroundWindowAsync();
+        var capture = await _screenCapture.CaptureForegroundWindowAsync(); // hidden desktop
         var ocrResult = await _ocrEngine.RecognizeAsync(capture);
         
         var word = ocrResult.FindFirstWord(text);
@@ -879,6 +892,12 @@ public enum HybridElementSource
     VisualDetection
 }
 ```
+## Session Routing & Concurrency
+
+- **Per-session capture drivers**: Each session owns a dedicated duplication handle so simultaneous agents cannot starve one another.
+- **Virtual cursor overlays**: Cursor inclusion uses session-specific virtual input events, never the user’s hardware pointer.
+- **Frame budget enforcement**: `SessionFrameTimeout` protects the system from slow capture loops and allows graceful fallback.
+- **User safety**: Because all pixels are rendered off-screen, the user never sees automation flicker yet can reopen the target application afterward and continue where the agent left off.
 
 ## Usage Examples
 

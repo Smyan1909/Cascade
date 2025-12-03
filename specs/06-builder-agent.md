@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Builder Agent takes the output from the Explorer Agent (application model and knowledge) and generates a complete, specialized agent for the target application. This includes generating automation code, creating an instruction list, and packaging everything into a deployable agent.
+The Builder Agent takes the output from the Explorer Agent (application model and knowledge) and generates a complete, specialized agent for the target application. Code generation, validation, and smoke testing run inside hidden Windows Virtual Desktop sessions using virtual input devices so the user can continue working on the real desktop while new agents are produced.
 
 ## Architecture
 
@@ -35,6 +35,12 @@ python/cascade_agent/builder/
     └── generated_code.py
 ```
 
+## Hidden Desktop Session Strategy
+
+- Builder reuses the Explorer’s session when possible so validations run in the same environment.
+- Before dynamic validation/tests, the agent ensures the session is alive or requests a fresh one via SessionService.
+- After packaging, Builder releases the session so subsequent specialized agents or the end user can take over.
+
 ## Agent State
 
 ```python
@@ -46,6 +52,10 @@ class BuilderState(TypedDict):
     application_model: ApplicationModel
     exploration_results: ExplorationResults
     original_instructions: str
+    
+    # Session
+    session_handle: Optional[SessionHandle]
+    session_state: str
     
     # Messages
     messages: Annotated[list, add_messages]
@@ -147,6 +157,7 @@ def create_builder_graph() -> StateGraph:
     workflow = StateGraph(BuilderState)
     
     # Add nodes
+    workflow.add_node("prepare_session", prepare_session_node)
     workflow.add_node("analyze_input", analyze_input_node)
     workflow.add_node("design_agent", design_agent_node)
     workflow.add_node("define_capabilities", define_capabilities_node)
@@ -159,7 +170,8 @@ def create_builder_graph() -> StateGraph:
     workflow.add_node("package_agent", package_agent_node)
     
     # Set entry point
-    workflow.set_entry_point("analyze_input")
+    workflow.set_entry_point("prepare_session")
+    workflow.add_edge("prepare_session", "analyze_input")
     
     # Linear flow through design
     workflow.add_edge("analyze_input", "design_agent")
@@ -201,6 +213,23 @@ def create_builder_graph() -> StateGraph:
 ### Analysis Node
 
 ```python
+async def prepare_session_node(state: BuilderState) -> dict:
+    """Ensure a hidden desktop session is available for validation runs."""
+    
+    if state.get("session_handle"):
+        return {}
+    
+    response = await session_client.attach_or_create(
+        agent_id=state["application_model"]["name"],
+        preferred_profile=state["exploration_results"].get("preferred_profile"))
+    
+    return {
+        "session_handle": response.session,
+        "session_state": response.state,
+        "messages": [AIMessage(content=f"Builder attached to session {response.session.session_id}")]
+    }
+
+
 async def analyze_input_node(state: BuilderState) -> dict:
     """Analyze the input from Explorer Agent."""
     
@@ -450,6 +479,9 @@ async def generate_instructions_node(state: BuilderState) -> dict:
 async def validate_agent_node(state: BuilderState) -> dict:
     """Validate the generated agent through testing."""
     
+    if not state.get("session_handle"):
+        raise RuntimeError("Session required before validation")
+    
     actions = state["generated_actions"]
     workflows = state["generated_workflows"]
     
@@ -571,6 +603,9 @@ async def package_agent_node(state: BuilderState) -> dict:
         agent_record["id"],
         script_ids=script_ids
     )
+    
+    if state.get("session_handle"):
+        await session_client.release(state["session_handle"].session_id, reason="builder_complete")
     
     final_agent = BuiltAgent(
         spec=spec,

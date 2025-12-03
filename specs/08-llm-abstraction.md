@@ -2,7 +2,7 @@
 
 ## Overview
 
-The LLM Abstraction Layer provides a unified interface for multiple LLM providers (OpenAI, Anthropic, Azure OpenAI), enabling provider switching, fallback chains, token management, and cost tracking.
+The LLM Abstraction Layer provides a unified interface for multiple LLM providers (OpenAI, Anthropic, Azure OpenAI), enabling provider switching, fallback chains, token management, and cost tracking. Prompts now include hints about the session state (e.g., “You are running in a hidden desktop session”) so reasoning steps account for virtualized UI.
 
 ## Architecture
 
@@ -31,6 +31,12 @@ python/cascade_agent/llm/
     ├── token_utils.py          # Token counting utilities
     └── response_parser.py      # Response parsing
 ```
+
+## Session Context Awareness
+
+- Tool invocations include `session_id` metadata so the LLM can reason about long-running tasks across sessions.
+- The abstraction exposes a helper `build_session_system_prompt(SessionHandle)` that agents call before each run. This reminds the LLM that automation happens off-screen and the user stays in control.
+- When sessions are recycled, the LLM is told to reorient itself by summarizing prior findings before continuing execution.
 
 ## Base Interfaces
 
