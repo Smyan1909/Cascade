@@ -1,4 +1,4 @@
-using Cascade.Database.Models;
+using Cascade.Core;
 using Cascade.Database.Enums;
 
 namespace Cascade.Database.Entities;

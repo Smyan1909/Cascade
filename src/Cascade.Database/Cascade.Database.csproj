@@ -25,6 +25,10 @@
     <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Cascade.Core\Cascade.Core.csproj" />
+  </ItemGroup>
+
 </Project>
 
 

@@ -2,12 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Cascade.Core;
+using Cascade.Core.Session;
 using Cascade.UIAutomation.Actions;
 using Cascade.UIAutomation.Discovery;
 using Cascade.UIAutomation.Elements;
 using Cascade.UIAutomation.Models;
 using Cascade.UIAutomation.Patterns;
-using Cascade.UIAutomation.Session;
 using System.Drawing;
 using System.Windows.Automation;
 

@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Cascade.Database.Entities;
 using Cascade.Database.Enums;
-using Cascade.Database.Models;
+using Cascade.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 

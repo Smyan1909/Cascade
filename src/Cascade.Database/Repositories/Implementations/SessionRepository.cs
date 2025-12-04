@@ -1,7 +1,7 @@
 using Cascade.Database.Context;
 using Cascade.Database.Entities;
 using Cascade.Database.Enums;
-using Cascade.Database.Models;
+using Cascade.Core;
 using Microsoft.EntityFrameworkCore;
 
 namespace Cascade.Database.Repositories.Implementations;

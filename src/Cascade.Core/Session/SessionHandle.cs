@@ -1,9 +1,8 @@
-using Cascade.UIAutomation.Models;
-
-namespace Cascade.UIAutomation.Session;
+namespace Cascade.Core.Session;
 
 /// <summary>
 /// Represents a unique handle to a hidden Windows Virtual Desktop session.
+/// Shared between UI Automation and Vision components so every RPC carries the same identifiers.
 /// </summary>
 public sealed record SessionHandle
 {
@@ -30,7 +29,7 @@ public sealed record SessionHandle
     {
         if (!IsValid)
         {
-            throw new InvalidOperationException("SessionHandle is not valid. Ensure the SessionService issued a handle before invoking UI automation.");
+            throw new InvalidOperationException("SessionHandle is not valid. Ensure the SessionService issued a handle before invoking automation.");
         }
     }
 

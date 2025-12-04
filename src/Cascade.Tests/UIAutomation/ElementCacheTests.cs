@@ -1,8 +1,8 @@
 using System;
 using System.Threading.Tasks;
+using Cascade.Core;
+using Cascade.Core.Session;
 using Cascade.UIAutomation.Elements;
-using Cascade.UIAutomation.Models;
-using Cascade.UIAutomation.Session;
 using FluentAssertions;
 using Moq;
 using Xunit;
