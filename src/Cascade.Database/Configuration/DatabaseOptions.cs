@@ -1,3 +1,4 @@
+using System;
 using Cascade.Database.Enums;
 
 namespace Cascade.Database.Configuration;
@@ -58,6 +59,11 @@ public class DatabaseOptions
     /// Whether to use SSL for PostgreSQL connections.
     /// </summary>
     public bool UseSsl { get; set; } = true;
+
+    /// <summary>
+    /// How long to retain session logs and events.
+    /// </summary>
+    public TimeSpan SessionLogRetention { get; set; } = TimeSpan.FromDays(30);
 
     /// <summary>
     /// Whether to automatically run migrations on startup.

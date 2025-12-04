@@ -1,4 +1,5 @@
 using Cascade.Database.Entities;
+using Cascade.Database.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace Cascade.Database.Context;
@@ -54,6 +55,16 @@ public class CascadeDbContext : DbContext
     public DbSet<Entities.Configuration> Configurations => Set<Entities.Configuration>();
 
     /// <summary>
+    /// Automation sessions collection.
+    /// </summary>
+    public DbSet<AutomationSession> AutomationSessions => Set<AutomationSession>();
+
+    /// <summary>
+    /// Session events collection.
+    /// </summary>
+    public DbSet<SessionEvent> SessionEvents => Set<SessionEvent>();
+
+    /// <summary>
     /// Creates a new instance of the CascadeDbContext.
     /// </summary>
     /// <param name="options">The options for this context.</param>
@@ -105,6 +116,16 @@ public class CascadeDbContext : DbContext
             // Handle CreatedAt for new entities
             if (entry.State == EntityState.Added)
             {
+                if (entry.Entity is AutomationSession session && session.CreatedAt == default)
+                {
+                    session.CreatedAt = now;
+                }
+
+                if (entry.Entity is SessionEvent evt && evt.OccurredAt == default)
+                {
+                    evt.OccurredAt = now;
+                }
+
                 var createdAtProperty = entry.Properties
                     .FirstOrDefault(p => p.Metadata.Name == "CreatedAt");
                 
@@ -139,6 +160,13 @@ public class CascadeDbContext : DbContext
             if (updatedAtProperty != null)
             {
                 updatedAtProperty.CurrentValue = now;
+            }
+
+            if (entry.Entity is AutomationSession sessionEntity &&
+                sessionEntity.State == Enums.SessionState.Released &&
+                sessionEntity.ReleasedAt == null)
+            {
+                sessionEntity.ReleasedAt = now;
             }
         }
     }

@@ -85,5 +85,10 @@ public class Agent
     /// Collection of execution records for this agent.
     /// </summary>
     public ICollection<ExecutionRecord> Executions { get; set; } = new List<ExecutionRecord>();
+
+    /// <summary>
+    /// Sessions that have been created for this agent.
+    /// </summary>
+    public ICollection<AutomationSession> Sessions { get; set; } = new List<AutomationSession>();
 }
 
