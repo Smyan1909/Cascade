@@ -30,6 +30,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Cascade.Database\Cascade.Database.csproj" />
+    <ProjectReference Include="..\Cascade.UIAutomation\Cascade.UIAutomation.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App" />
   </ItemGroup>
 
 </Project>
