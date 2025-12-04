@@ -82,5 +82,10 @@ public class ExecutionRecord
     /// Collection of steps executed during this execution.
     /// </summary>
     public ICollection<ExecutionStep> Steps { get; set; } = new List<ExecutionStep>();
+
+    /// <summary>
+    /// Sessions associated with this execution (handles reacquire/retry cases).
+    /// </summary>
+    public ICollection<AutomationSession> Sessions { get; set; } = new List<AutomationSession>();
 }
 

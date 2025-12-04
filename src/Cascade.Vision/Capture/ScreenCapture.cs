@@ -1,465 +1,102 @@
-using System.Drawing;
 using System.Drawing.Imaging;
-using System.Runtime.InteropServices;
-using Cascade.UIAutomation.Elements;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Png;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.Formats.Bmp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
-using Image = SixLabors.ImageSharp.Image;
+using Microsoft.Extensions.Logging;
 
 namespace Cascade.Vision.Capture;
 
-/// <summary>
-/// Screen capture implementation using Win32 APIs.
-/// </summary>
-public class ScreenCapture : IScreenCapture
+public sealed class ScreenCapture : IScreenCapture
 {
-    #region Win32 Imports
+    private readonly ISessionFrameProvider _frameProvider;
+    private readonly ILogger<ScreenCapture>? _logger;
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetDesktopWindow();
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetWindowDC(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
-
-    [DllImport("user32.dll")]
-    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
-    [DllImport("user32.dll")]
-    private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
-
-    [DllImport("user32.dll")]
-    private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
-
-    [DllImport("user32.dll")]
-    private static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int count);
-
-    [DllImport("user32.dll")]
-    private static extern int GetWindowTextLength(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumWindows(EnumWindowsProc enumProc, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    private static extern bool IsWindowVisible(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
-
-    [DllImport("gdi32.dll")]
-    private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
-
-    [DllImport("gdi32.dll")]
-    private static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int nWidth, int nHeight);
-
-    [DllImport("gdi32.dll")]
-    private static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
-
-    [DllImport("gdi32.dll")]
-    private static extern bool BitBlt(IntPtr hdcDest, int xDest, int yDest, int wDest, int hDest,
-        IntPtr hdcSource, int xSrc, int ySrc, int rop);
-
-    [DllImport("gdi32.dll")]
-    private static extern bool DeleteDC(IntPtr hdc);
-
-    [DllImport("gdi32.dll")]
-    private static extern bool DeleteObject(IntPtr hObject);
-
-    [DllImport("dwmapi.dll")]
-    private static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
-
-    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RECT
+    public ScreenCapture(SessionHandle session, ISessionFrameProvider frameProvider, CaptureOptions? options = null, ILogger<ScreenCapture>? logger = null)
     {
-        public int Left;
-        public int Top;
-        public int Right;
-        public int Bottom;
-
-        public System.Drawing.Rectangle ToRectangle() =>
-            new(Left, Top, Right - Left, Bottom - Top);
+        Session = session ?? throw new ArgumentNullException(nameof(session));
+        _frameProvider = frameProvider ?? throw new ArgumentNullException(nameof(frameProvider));
+        Options = options ?? new CaptureOptions();
+        _logger = logger;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct POINT
-    {
-        public int X;
-        public int Y;
-    }
+    public SessionHandle Session { get; }
+    public CaptureOptions Options { get; set; }
 
-    private const int SRCCOPY = 0x00CC0020;
-    private const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
-    private const uint PW_CLIENTONLY = 0x1;
-    private const uint PW_RENDERFULLCONTENT = 0x2;
-
-    #endregion
-
-    /// <summary>
-    /// Gets or sets the capture options.
-    /// </summary>
-    public CaptureOptions Options { get; set; } = new();
-
-    /// <inheritdoc />
     public Task<CaptureResult> CaptureScreenAsync(int screenIndex = 0, CancellationToken cancellationToken = default)
-    {
-        return Task.Run(() =>
-        {
-            var bounds = RegionSelector.GetScreenBounds(screenIndex);
-            if (bounds.IsEmpty)
-                throw new ArgumentException($"Screen index {screenIndex} is not valid.", nameof(screenIndex));
+        => CaptureAsync(() => _frameProvider.CaptureScreenAsync(Session, screenIndex, Options, cancellationToken), cancellationToken);
 
-            return CaptureRegionCore(bounds, null);
-        }, cancellationToken);
-    }
-
-    /// <inheritdoc />
     public Task<CaptureResult> CaptureAllScreensAsync(CancellationToken cancellationToken = default)
-    {
-        return Task.Run(() =>
-        {
-            var bounds = RegionSelector.GetVirtualScreenBounds();
-            return CaptureRegionCore(bounds, null);
-        }, cancellationToken);
-    }
+        => CaptureAsync(() => _frameProvider.CaptureAllScreensAsync(Session, Options, cancellationToken), cancellationToken);
 
-    /// <inheritdoc />
-    public Task<CaptureResult> CapturePrimaryScreenAsync(CancellationToken cancellationToken = default)
-    {
-        return CaptureScreenAsync(0, cancellationToken);
-    }
-
-    /// <inheritdoc />
     public Task<CaptureResult> CaptureWindowAsync(IntPtr windowHandle, CancellationToken cancellationToken = default)
-    {
-        return Task.Run(() => CaptureWindowCore(windowHandle), cancellationToken);
-    }
+        => CaptureAsync(() => _frameProvider.CaptureWindowAsync(Session, windowHandle, Options, cancellationToken), cancellationToken, windowHandle);
 
-    /// <inheritdoc />
-    public Task<CaptureResult> CaptureWindowAsync(string windowTitle, bool exactMatch = false, CancellationToken cancellationToken = default)
-    {
-        return Task.Run(() =>
-        {
-            var handle = FindWindowByTitle(windowTitle, exactMatch);
-            if (handle == IntPtr.Zero)
-                throw new InvalidOperationException($"Window with title '{windowTitle}' not found.");
+    public Task<CaptureResult> CaptureWindowAsync(string windowTitle, CancellationToken cancellationToken = default)
+        => CaptureAsync(() => _frameProvider.CaptureWindowAsync(Session, windowTitle, Options, cancellationToken), cancellationToken);
 
-            return CaptureWindowCore(handle);
-        }, cancellationToken);
-    }
-
-    /// <inheritdoc />
     public Task<CaptureResult> CaptureForegroundWindowAsync(CancellationToken cancellationToken = default)
-    {
-        return Task.Run(() =>
-        {
-            var handle = GetForegroundWindow();
-            if (handle == IntPtr.Zero)
-                throw new InvalidOperationException("No foreground window found.");
+        => CaptureAsync(() => _frameProvider.CaptureForegroundWindowAsync(Session, Options, cancellationToken), cancellationToken);
 
-            return CaptureWindowCore(handle);
-        }, cancellationToken);
-    }
+    public Task<CaptureResult> CaptureRegionAsync(Rectangle region, CancellationToken cancellationToken = default)
+        => CaptureAsync(() => _frameProvider.CaptureRegionAsync(Session, region, Options, cancellationToken), cancellationToken);
 
-    /// <inheritdoc />
-    public Task<CaptureResult> CaptureRegionAsync(System.Drawing.Rectangle region, CancellationToken cancellationToken = default)
-    {
-        return Task.Run(() => CaptureRegionCore(region, null), cancellationToken);
-    }
-
-    /// <inheritdoc />
     public Task<CaptureResult> CaptureElementAsync(IUIElement element, CancellationToken cancellationToken = default)
     {
-        return Task.Run(() =>
-        {
-            var bounds = element.BoundingRectangle;
-            if (bounds.IsEmpty)
-                throw new InvalidOperationException("Element has no bounding rectangle.");
-
-            return CaptureRegionCore(bounds, null);
-        }, cancellationToken);
+        if (element is null) throw new ArgumentNullException(nameof(element));
+        var region = element.BoundingRectangle;
+        return CaptureRegionAsync(region, cancellationToken);
     }
 
-    private CaptureResult CaptureWindowCore(IntPtr windowHandle)
+    public Task<CaptureResult> CaptureInteractiveAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Interactive capture requires a UI loop and is not available in headless mode.");
+
+    private async Task<CaptureResult> CaptureAsync(Func<Task<Bitmap>> capture, CancellationToken cancellationToken, IntPtr? windowHandle = null)
     {
-        var windowTitle = GetWindowTitle(windowHandle);
-        System.Drawing.Rectangle bounds;
+        Session.EnsureValid();
+        using var bitmap = await capture().ConfigureAwait(false);
+        var region = new Rectangle(0, 0, bitmap.Width, bitmap.Height);
+        var data = Encode(bitmap, Options.ImageFormat, Options.JpegQuality);
+        _logger?.LogDebug("Captured frame {Width}x{Height} ({Format}) for session {SessionId}", bitmap.Width, bitmap.Height, Options.ImageFormat, Session.SessionId);
 
-        // Try to get extended frame bounds (more accurate on Windows 10+)
-        if (DwmGetWindowAttribute(windowHandle, DWMWA_EXTENDED_FRAME_BOUNDS,
-            out RECT extendedBounds, Marshal.SizeOf<RECT>()) == 0)
+        return new CaptureResult
         {
-            bounds = extendedBounds.ToRectangle();
-        }
-        else
-        {
-            GetWindowRect(windowHandle, out RECT windowRect);
-            bounds = windowRect.ToRectangle();
-        }
-
-        if (Options.ClientAreaOnly)
-        {
-            GetClientRect(windowHandle, out RECT clientRect);
-            POINT topLeft = new() { X = 0, Y = 0 };
-            ClientToScreen(windowHandle, ref topLeft);
-            bounds = new System.Drawing.Rectangle(
-                topLeft.X, topLeft.Y,
-                clientRect.Right - clientRect.Left,
-                clientRect.Bottom - clientRect.Top);
-        }
-
-        // Use PrintWindow for better capture of layered/transparent windows
-        using var bitmap = CaptureWindowBitmap(windowHandle, bounds.Width, bounds.Height);
-        var imageData = BitmapToBytes(bitmap);
-
-        return new CaptureResult(
-            imageData,
-            Options.ImageFormat,
-            bounds.Width,
-            bounds.Height,
-            bounds,
-            windowHandle)
-        {
-            SourceWindowTitle = windowTitle
+            SessionId = Session.SessionId,
+            ImageData = data,
+            ImageFormat = Options.ImageFormat,
+            Width = bitmap.Width,
+            Height = bitmap.Height,
+            CapturedRegion = region,
+            CapturedAt = DateTime.UtcNow,
+            SourceWindowHandle = windowHandle
         };
     }
 
-    private Bitmap CaptureWindowBitmap(IntPtr windowHandle, int width, int height)
+    private static byte[] Encode(Bitmap bitmap, string format, int jpegQuality)
     {
-        var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-        
-        using (var graphics = Graphics.FromImage(bitmap))
+        var imageFormat = format.ToLowerInvariant() switch
         {
-            var hdc = graphics.GetHdc();
-            try
-            {
-                // Try PrintWindow first (works better for modern apps)
-                uint flags = Options.ClientAreaOnly ? PW_CLIENTONLY : PW_RENDERFULLCONTENT;
-                if (!PrintWindow(windowHandle, hdc, flags))
-                {
-                    // Fallback to BitBlt
-                    var windowDc = GetWindowDC(windowHandle);
-                    try
-                    {
-                        BitBlt(hdc, 0, 0, width, height, windowDc, 0, 0, SRCCOPY);
-                    }
-                    finally
-                    {
-                        ReleaseDC(windowHandle, windowDc);
-                    }
-                }
-            }
-            finally
-            {
-                graphics.ReleaseHdc(hdc);
-            }
-        }
-
-        return bitmap;
-    }
-
-    private CaptureResult CaptureRegionCore(System.Drawing.Rectangle region, IntPtr? windowHandle)
-    {
-        using var bitmap = new Bitmap(region.Width, region.Height, PixelFormat.Format32bppArgb);
-        
-        using (var graphics = Graphics.FromImage(bitmap))
-        {
-            graphics.CopyFromScreen(
-                region.Left, region.Top,
-                0, 0,
-                region.Size,
-                CopyPixelOperation.SourceCopy);
-
-            if (Options.IncludeCursor)
-            {
-                DrawCursor(graphics, region);
-            }
-        }
-
-        var processedBitmap = ProcessBitmap(bitmap);
-        var imageData = BitmapToBytes(processedBitmap);
-
-        if (processedBitmap != bitmap)
-            processedBitmap.Dispose();
-
-        return new CaptureResult(
-            imageData,
-            Options.ImageFormat,
-            (int)(region.Width * Options.Scale),
-            (int)(region.Height * Options.Scale),
-            region,
-            windowHandle);
-    }
-
-    private Bitmap ProcessBitmap(Bitmap original)
-    {
-        if (Math.Abs(Options.Scale - 1.0) < 0.001 && !Options.RemoveTransparency)
-            return original;
-
-        int newWidth = (int)(original.Width * Options.Scale);
-        int newHeight = (int)(original.Height * Options.Scale);
-
-        var processed = new Bitmap(newWidth, newHeight, PixelFormat.Format32bppArgb);
-        
-        using (var graphics = Graphics.FromImage(processed))
-        {
-            if (Options.RemoveTransparency)
-            {
-                graphics.Clear(Options.TransparencyReplacement);
-            }
-
-            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-            graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
-            graphics.DrawImage(original, 0, 0, newWidth, newHeight);
-        }
-
-        return processed;
-    }
-
-    private void DrawCursor(Graphics graphics, System.Drawing.Rectangle captureRegion)
-    {
-        try
-        {
-            var cursorInfo = new CursorInfo { cbSize = Marshal.SizeOf<CursorInfo>() };
-            if (GetCursorInfo(ref cursorInfo) && cursorInfo.flags == 1) // CURSOR_SHOWING
-            {
-                var cursorPos = cursorInfo.ptScreenPos;
-                if (captureRegion.Contains(cursorPos.X, cursorPos.Y))
-                {
-                    Cursors.Default.Draw(graphics,
-                        new System.Drawing.Rectangle(
-                            cursorPos.X - captureRegion.Left,
-                            cursorPos.Y - captureRegion.Top,
-                            32, 32));
-                }
-            }
-        }
-        catch
-        {
-            // Ignore cursor drawing errors
-        }
-    }
-
-    [DllImport("user32.dll")]
-    private static extern bool GetCursorInfo(ref CursorInfo pci);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct CursorInfo
-    {
-        public int cbSize;
-        public int flags;
-        public IntPtr hCursor;
-        public POINT ptScreenPos;
-    }
-
-    private byte[] BitmapToBytes(Bitmap bitmap)
-    {
-        using var ms = new MemoryStream();
-        using var image = ConvertToImageSharp(bitmap);
-        
-        var encoder = Options.ImageFormat.ToLowerInvariant() switch
-        {
-            "jpeg" or "jpg" => (SixLabors.ImageSharp.Formats.IImageEncoder)new JpegEncoder { Quality = Options.JpegQuality },
-            "bmp" => new BmpEncoder(),
-            _ => new PngEncoder()
+            "jpg" or "jpeg" => ImageFormat.Jpeg,
+            "bmp" => ImageFormat.Bmp,
+            "gif" => ImageFormat.Gif,
+            _ => ImageFormat.Png
         };
 
-        image.Save(ms, encoder);
-        return ms.ToArray();
-    }
-
-    private static Image<Rgba32> ConvertToImageSharp(Bitmap bitmap)
-    {
-        var bitmapData = bitmap.LockBits(
-            new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height),
-            ImageLockMode.ReadOnly,
-            PixelFormat.Format32bppArgb);
-
-        try
+        using var stream = new MemoryStream();
+        if (imageFormat.Equals(ImageFormat.Jpeg))
         {
-            var image = new Image<Rgba32>(bitmap.Width, bitmap.Height);
-            
-            unsafe
+            var encoder = ImageCodecInfo.GetImageEncoders().FirstOrDefault(c => c.FormatID == ImageFormat.Jpeg.Guid);
+            var quality = Math.Clamp(jpegQuality, 10, 100);
+            var qualityParam = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)quality);
+            var encoderParams = new EncoderParameters(1);
+            encoderParams.Param[0] = qualityParam;
+
+            if (encoder is not null)
             {
-                byte* sourcePtr = (byte*)bitmapData.Scan0;
-                
-                image.ProcessPixelRows(accessor =>
-                {
-                    for (int y = 0; y < accessor.Height; y++)
-                    {
-                        var row = accessor.GetRowSpan(y);
-                        byte* sourceRow = sourcePtr + (y * bitmapData.Stride);
-                        
-                        for (int x = 0; x < accessor.Width; x++)
-                        {
-                            // BGRA to RGBA
-                            row[x] = new Rgba32(
-                                sourceRow[x * 4 + 2], // R
-                                sourceRow[x * 4 + 1], // G
-                                sourceRow[x * 4 + 0], // B
-                                sourceRow[x * 4 + 3]  // A
-                            );
-                        }
-                    }
-                });
+                bitmap.Save(stream, encoder, encoderParams);
+                return stream.ToArray();
             }
-
-            return image;
         }
-        finally
-        {
-            bitmap.UnlockBits(bitmapData);
-        }
-    }
 
-    private static IntPtr FindWindowByTitle(string title, bool exactMatch)
-    {
-        IntPtr foundHandle = IntPtr.Zero;
-        
-        EnumWindows((hWnd, lParam) =>
-        {
-            if (!IsWindowVisible(hWnd))
-                return true;
-
-            var windowTitle = GetWindowTitle(hWnd);
-            if (string.IsNullOrEmpty(windowTitle))
-                return true;
-
-            bool matches = exactMatch
-                ? windowTitle.Equals(title, StringComparison.OrdinalIgnoreCase)
-                : windowTitle.Contains(title, StringComparison.OrdinalIgnoreCase);
-
-            if (matches)
-            {
-                foundHandle = hWnd;
-                return false; // Stop enumeration
-            }
-
-            return true;
-        }, IntPtr.Zero);
-
-        return foundHandle;
-    }
-
-    private static string GetWindowTitle(IntPtr hWnd)
-    {
-        int length = GetWindowTextLength(hWnd);
-        if (length == 0)
-            return string.Empty;
-
-        var builder = new System.Text.StringBuilder(length + 1);
-        GetWindowText(hWnd, builder, builder.Capacity);
-        return builder.ToString();
+        bitmap.Save(stream, imageFormat);
+        return stream.ToArray();
     }
 }
+
 

@@ -150,6 +150,65 @@ namespace Cascade.Database.Migrations
                     b.ToTable("agent_versions", (string)null);
                 });
 
+            modelBuilder.Entity("Cascade.Database.Entities.AutomationSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AgentId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("agent_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("ExecutionRecordId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("execution_record_id");
+
+                    b.Property<string>("Profile")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("profile");
+
+                    b.Property<DateTime?>("ReleasedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("released_at");
+
+                    b.Property<string>("RunId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("SessionId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("session_id");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("Active")
+                        .HasColumnName("state");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AgentId");
+
+                    b.HasIndex("ExecutionRecordId");
+
+                    b.HasIndex("SessionId")
+                        .IsUnique();
+
+                    b.ToTable("automation_sessions", (string)null);
+                });
+
             modelBuilder.Entity("Cascade.Database.Entities.Configuration", b =>
                 {
                     b.Property<string>("Key")
@@ -577,6 +636,42 @@ namespace Cascade.Database.Migrations
                     b.ToTable("script_versions", (string)null);
                 });
 
+            modelBuilder.Entity("Cascade.Database.Entities.SessionEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AutomationSessionId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("automation_session_id");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("event_type");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("{}")
+                        .HasColumnName("payload");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AutomationSessionId")
+                        .HasDatabaseName("idx_session_events_session");
+
+                    b.ToTable("session_events", (string)null);
+                });
+
             modelBuilder.Entity("Cascade.Database.Entities.AgentVersion", b =>
                 {
                     b.HasOne("Cascade.Database.Entities.Agent", "Agent")
@@ -586,6 +681,24 @@ namespace Cascade.Database.Migrations
                         .IsRequired();
 
                     b.Navigation("Agent");
+                });
+
+            modelBuilder.Entity("Cascade.Database.Entities.AutomationSession", b =>
+                {
+                    b.HasOne("Cascade.Database.Entities.Agent", "Agent")
+                        .WithMany("Sessions")
+                        .HasForeignKey("AgentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Cascade.Database.Entities.ExecutionRecord", "ExecutionRecord")
+                        .WithMany("Sessions")
+                        .HasForeignKey("ExecutionRecordId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Agent");
+
+                    b.Navigation("ExecutionRecord");
                 });
 
             modelBuilder.Entity("Cascade.Database.Entities.ExecutionRecord", b =>
@@ -652,17 +765,37 @@ namespace Cascade.Database.Migrations
                     b.Navigation("Script");
                 });
 
+            modelBuilder.Entity("Cascade.Database.Entities.SessionEvent", b =>
+                {
+                    b.HasOne("Cascade.Database.Entities.AutomationSession", "Session")
+                        .WithMany("Events")
+                        .HasForeignKey("AutomationSessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Session");
+                });
+
             modelBuilder.Entity("Cascade.Database.Entities.Agent", b =>
                 {
                     b.Navigation("Executions");
 
                     b.Navigation("Scripts");
 
+                    b.Navigation("Sessions");
+
                     b.Navigation("Versions");
+                });
+
+            modelBuilder.Entity("Cascade.Database.Entities.AutomationSession", b =>
+                {
+                    b.Navigation("Events");
                 });
 
             modelBuilder.Entity("Cascade.Database.Entities.ExecutionRecord", b =>
                 {
+                    b.Navigation("Sessions");
+
                     b.Navigation("Steps");
                 });
 

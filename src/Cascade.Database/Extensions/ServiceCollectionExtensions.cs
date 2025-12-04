@@ -52,6 +52,7 @@ public static class ServiceCollectionExtensions
             opt.Username = options.Username;
             opt.Password = options.Password;
             opt.UseSsl = options.UseSsl;
+            opt.SessionLogRetention = options.SessionLogRetention;
             opt.AutoMigrate = options.AutoMigrate;
             opt.MaxPoolSize = options.MaxPoolSize;
             opt.CommandTimeout = options.CommandTimeout;
@@ -69,6 +70,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IExplorationRepository, ExplorationRepository>();
         services.AddScoped<IExecutionRepository, ExecutionRepository>();
         services.AddScoped<IConfigurationRepository, ConfigurationRepository>();
+        services.AddScoped<ISessionRepository, SessionRepository>();
 
         return services;
     }

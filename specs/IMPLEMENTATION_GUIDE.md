@@ -81,18 +81,20 @@ Keep these requirements in mind while following the per-module guidance below.
 
 **Testing protocol:**
 - **Unit tests**: Mock the UIA COM interfaces, test your wrapper logic
-- **Integration tests inside hidden session**: Launch Calculator/Notepad within a virtual desktop and drive them via virtual input
+- **Integration tests inside hidden session**: Launch Calculator/Notepad within a virtual desktop and drive them via virtual input *(deferred until the Session Host orchestration layer lands in Phase 3; current Phase 1 only validates the database + contract surface).*
   - Test finding Calculator window
   - Test clicking number buttons
   - Test reading display value
   - Test tree walking depth
-- **Integration tests with Notepad**: For text input testing
+- **Integration tests with Notepad**: For text input testing *(same deferment while we finish Session Host work).*
   - Test typing text
   - Test value patterns
   - Test menu navigation
 - **Performance tests**: Measure tree walk times, cache hit rates
 - **Stress tests**: Rapid element lookups, concurrent access
 - **Session failover tests**: Kill the hidden desktop mid-run and ensure UIA recovers gracefully
+
+> **Note:** Hidden-desktop automation tests are blocked until `SessionService` is fully implemented. Track re-enablement in Milestone 3 when the Explorer agent first consumes the service.
 
 **Success criteria:** Can programmatically operate Calculator and Notepad reliably inside hidden sessions without affecting the user's desktop
 

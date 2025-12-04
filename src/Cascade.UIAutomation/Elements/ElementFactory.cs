@@ -1,58 +1,80 @@
-using Cascade.UIAutomation.Interop;
+using Cascade.UIAutomation.Input;
+using Cascade.UIAutomation.Session;
+using Microsoft.Extensions.Logging;
+using System.Windows.Automation;
 
 namespace Cascade.UIAutomation.Elements;
 
-/// <summary>
-/// Factory for creating UI element wrappers.
-/// </summary>
-public class ElementFactory
+public sealed class ElementFactory
 {
-    private readonly IUIAutomationWrapper _automation;
-    private readonly ElementCache? _cache;
+    private readonly SessionContext _context;
+    private readonly IVirtualInputProvider _inputProvider;
+    private readonly ILogger<ElementFactory>? _logger;
 
-    /// <summary>
-    /// Initializes a new instance of the <see cref="ElementFactory"/> class.
-    /// </summary>
-    /// <param name="automation">The UI Automation wrapper instance.</param>
-    /// <param name="cache">Optional element cache.</param>
-    public ElementFactory(IUIAutomationWrapper automation, ElementCache? cache = null)
+    public ElementFactory(SessionContext context, IVirtualInputProvider inputProvider, ILogger<ElementFactory>? logger = null)
     {
-        _automation = automation ?? throw new ArgumentNullException(nameof(automation));
-        _cache = cache;
+        _context = context ?? throw new ArgumentNullException(nameof(context));
+        _inputProvider = inputProvider ?? throw new ArgumentNullException(nameof(inputProvider));
+        _logger = logger;
+
+        Cache = new ElementCache(_context.Session, RefreshInternalAsync);
     }
 
-    /// <summary>
-    /// Creates a UI element wrapper from a native UIA element.
-    /// </summary>
-    /// <param name="nativeElement">The native UIA element.</param>
-    /// <returns>The wrapped UI element, or null if the native element is null.</returns>
-    public IUIElement? Create(object? nativeElement)
+    public ElementCache Cache { get; }
+
+    public IUIElement Create(AutomationElement element)
     {
-        if (nativeElement == null)
-            return null;
-
-        var element = new UIElement(nativeElement, this, _automation);
-
-        // Check cache first
-        if (_cache != null)
+        if (element is null)
         {
-            var cached = _cache.GetCached(element.RuntimeId);
-            if (cached != null)
-                return cached;
-
-            _cache.Cache(element);
+            throw new ArgumentNullException(nameof(element));
         }
 
-        return element;
+        var runtimeId = element.GetRuntimeId();
+        if (runtimeId is not null)
+        {
+            var key = string.Join(".", runtimeId);
+            var cached = Cache.GetCached(key);
+            if (cached is not null)
+            {
+                return cached;
+            }
+        }
+
+        var uiElement = new UIElement(element, _context, _inputProvider, this, _logger);
+        Cache.Cache(uiElement);
+        return uiElement;
     }
 
-    /// <summary>
-    /// Gets the UI Automation wrapper instance.
-    /// </summary>
-    internal IUIAutomationWrapper Automation => _automation;
+    public IReadOnlyList<IUIElement> CreateMany(AutomationElementCollection collection)
+    {
+        var result = new List<IUIElement>(collection?.Count ?? 0);
+        if (collection is null)
+        {
+            return result;
+        }
 
-    /// <summary>
-    /// Gets the element cache, if any.
-    /// </summary>
-    internal ElementCache? Cache => _cache;
+        foreach (AutomationElement element in collection)
+        {
+            result.Add(Create(element));
+        }
+
+        return result;
+    }
+
+    internal AutomationElementCollection FindChildren(AutomationElement parent, Condition condition, TreeScope scope)
+    {
+        return parent.FindAll(scope, condition);
+    }
+
+    private Task<IUIElement?> RefreshInternalAsync(IUIElement element)
+    {
+        if (element is UIElement concrete)
+        {
+            return Task.FromResult<IUIElement?>(new UIElement(concrete.AutomationElement, _context, _inputProvider, this, _logger));
+        }
+
+        return Task.FromResult<IUIElement?>(null);
+    }
 }
+
+

@@ -1,202 +1,189 @@
 using System.Drawing;
-using Cascade.UIAutomation.Enums;
+using System.Windows.Automation;
 
 namespace Cascade.UIAutomation.Discovery;
 
-/// <summary>
-/// Defines criteria for searching UI elements.
-/// </summary>
 public class SearchCriteria
 {
-    /// <summary>
-    /// Gets or sets the AutomationId to match.
-    /// </summary>
     public string? AutomationId { get; set; }
-
-    /// <summary>
-    /// Gets or sets the exact Name to match.
-    /// </summary>
     public string? Name { get; set; }
-
-    /// <summary>
-    /// Gets or sets a substring that the Name must contain.
-    /// </summary>
     public string? NameContains { get; set; }
-
-    /// <summary>
-    /// Gets or sets the ClassName to match.
-    /// </summary>
     public string? ClassName { get; set; }
-
-    /// <summary>
-    /// Gets or sets the ControlType to match.
-    /// </summary>
     public ControlType? ControlType { get; set; }
-
-    /// <summary>
-    /// Gets or sets whether to match only enabled elements.
-    /// </summary>
     public bool? IsEnabled { get; set; }
-
-    /// <summary>
-    /// Gets or sets whether to match only offscreen elements.
-    /// </summary>
     public bool? IsOffscreen { get; set; }
-
-    /// <summary>
-    /// Gets or sets the bounding rectangle to match.
-    /// </summary>
     public Rectangle? BoundingRectangle { get; set; }
 
-    /// <summary>
-    /// Gets or sets the process ID to match.
-    /// </summary>
-    public int? ProcessId { get; set; }
+    private Func<AutomationElement, bool>? _predicateOverride;
 
-    /// <summary>
-    /// Gets or sets whether the element should be a content element.
-    /// </summary>
-    public bool? IsContentElement { get; set; }
+    public static SearchCriteria ByAutomationId(string id) => new() { AutomationId = id };
+    public static SearchCriteria ByName(string name) => new() { Name = name };
+    public static SearchCriteria ByClassName(string className) => new() { ClassName = className };
+    public static SearchCriteria ByControlType(ControlType type) => new() { ControlType = type };
 
-    /// <summary>
-    /// Gets or sets whether the element should be a control element.
-    /// </summary>
-    public bool? IsControlElement { get; set; }
+    public SearchCriteria WithPredicate(Func<AutomationElement, bool> predicate)
+    {
+        _predicateOverride = predicate ?? throw new ArgumentNullException(nameof(predicate));
+        return this;
+    }
 
-    // Internal properties for composite criteria
-    internal SearchCriteria? AndCriteria { get; private set; }
-    internal SearchCriteria? OrCriteria { get; private set; }
-    internal bool IsNegated { get; private set; }
-
-    /// <summary>
-    /// Creates a new search criteria that matches both this criteria and another.
-    /// </summary>
     public SearchCriteria And(SearchCriteria other)
     {
-        var result = Clone();
-        result.AndCriteria = other;
-        return result;
-    }
-
-    /// <summary>
-    /// Creates a new search criteria that matches either this criteria or another.
-    /// </summary>
-    public SearchCriteria Or(SearchCriteria other)
-    {
-        var result = Clone();
-        result.OrCriteria = other;
-        return result;
-    }
-
-    /// <summary>
-    /// Creates a new search criteria that negates this criteria.
-    /// </summary>
-    public SearchCriteria Not()
-    {
-        var result = Clone();
-        result.IsNegated = !result.IsNegated;
-        return result;
-    }
-
-    /// <summary>
-    /// Creates a search criteria for matching by AutomationId.
-    /// </summary>
-    public static SearchCriteria ByAutomationId(string id)
-        => new() { AutomationId = id };
-
-    /// <summary>
-    /// Creates a search criteria for matching by exact Name.
-    /// </summary>
-    public static SearchCriteria ByName(string name)
-        => new() { Name = name };
-
-    /// <summary>
-    /// Creates a search criteria for matching by Name containing a substring.
-    /// </summary>
-    public static SearchCriteria ByNameContains(string substring)
-        => new() { NameContains = substring };
-
-    /// <summary>
-    /// Creates a search criteria for matching by ClassName.
-    /// </summary>
-    public static SearchCriteria ByClassName(string className)
-        => new() { ClassName = className };
-
-    /// <summary>
-    /// Creates a search criteria for matching by ControlType.
-    /// </summary>
-    public static SearchCriteria ByControlType(ControlType controlType)
-        => new() { ControlType = controlType };
-
-    /// <summary>
-    /// Creates a search criteria for matching by ProcessId.
-    /// </summary>
-    public static SearchCriteria ByProcessId(int processId)
-        => new() { ProcessId = processId };
-
-    /// <summary>
-    /// Creates an empty search criteria that matches all elements.
-    /// </summary>
-    public static SearchCriteria All => new();
-
-    /// <summary>
-    /// Creates a clone of this search criteria.
-    /// </summary>
-    private SearchCriteria Clone()
-    {
+        if (other is null) return this;
         return new SearchCriteria
         {
-            AutomationId = AutomationId,
-            Name = Name,
-            NameContains = NameContains,
-            ClassName = ClassName,
-            ControlType = ControlType,
-            IsEnabled = IsEnabled,
-            IsOffscreen = IsOffscreen,
-            BoundingRectangle = BoundingRectangle,
-            ProcessId = ProcessId,
-            IsContentElement = IsContentElement,
-            IsControlElement = IsControlElement,
-            AndCriteria = AndCriteria,
-            OrCriteria = OrCriteria,
-            IsNegated = IsNegated
+            AutomationId = other.AutomationId ?? AutomationId,
+            Name = other.Name ?? Name,
+            NameContains = other.NameContains ?? NameContains,
+            ClassName = other.ClassName ?? ClassName,
+            ControlType = other.ControlType ?? ControlType,
+            IsEnabled = other.IsEnabled ?? IsEnabled,
+            IsOffscreen = other.IsOffscreen ?? IsOffscreen,
+            BoundingRectangle = other.BoundingRectangle ?? BoundingRectangle,
+            _predicateOverride = element => Match(element) && other.Match(element)
         };
     }
 
-    /// <summary>
-    /// Returns a string representation of this search criteria.
-    /// </summary>
-    public override string ToString()
+    public SearchCriteria Or(SearchCriteria other)
     {
-        var parts = new List<string>();
+        if (other is null) return this;
+        return new SearchCriteria
+        {
+            _predicateOverride = element => Match(element) || other.Match(element)
+        };
+    }
 
-        if (!string.IsNullOrEmpty(AutomationId))
-            parts.Add($"AutomationId='{AutomationId}'");
-        if (!string.IsNullOrEmpty(Name))
-            parts.Add($"Name='{Name}'");
-        if (!string.IsNullOrEmpty(NameContains))
-            parts.Add($"NameContains='{NameContains}'");
-        if (!string.IsNullOrEmpty(ClassName))
-            parts.Add($"ClassName='{ClassName}'");
-        if (ControlType.HasValue)
-            parts.Add($"ControlType={ControlType}");
-        if (IsEnabled.HasValue)
-            parts.Add($"IsEnabled={IsEnabled}");
-        if (IsOffscreen.HasValue)
-            parts.Add($"IsOffscreen={IsOffscreen}");
-        if (ProcessId.HasValue)
-            parts.Add($"ProcessId={ProcessId}");
+    public SearchCriteria Not()
+    {
+        return new SearchCriteria
+        {
+            _predicateOverride = element => !Match(element)
+        };
+    }
 
-        var result = parts.Count > 0 ? string.Join(", ", parts) : "All";
+    public bool Match(AutomationElement element)
+    {
+        if (element is null)
+        {
+            return false;
+        }
 
-        if (IsNegated)
-            result = $"NOT({result})";
-        if (AndCriteria != null)
-            result = $"({result}) AND ({AndCriteria})";
-        if (OrCriteria != null)
-            result = $"({result}) OR ({OrCriteria})";
+        if (_predicateOverride is not null)
+        {
+            return _predicateOverride(element);
+        }
 
-        return result;
+        if (!string.IsNullOrWhiteSpace(AutomationId))
+        {
+            var value = element.Current.AutomationId;
+            if (!string.Equals(value, AutomationId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(Name))
+        {
+            if (!string.Equals(element.Current.Name, Name, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(NameContains))
+        {
+            if (element.Current.Name?.Contains(NameContains, StringComparison.OrdinalIgnoreCase) != true)
+            {
+                return false;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(ClassName))
+        {
+            if (!string.Equals(element.Current.ClassName, ClassName, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        if (ControlType is not null && element.Current.ControlType != ControlType)
+        {
+            return false;
+        }
+
+        if (IsEnabled is not null && element.Current.IsEnabled != IsEnabled)
+        {
+            return false;
+        }
+
+        if (IsOffscreen is not null && element.Current.IsOffscreen != IsOffscreen)
+        {
+            return false;
+        }
+
+        if (BoundingRectangle is not null && !BoundingRectangle.Value.Contains(ToRectangle(element.Current.BoundingRectangle)))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    public Condition ToAutomationCondition()
+    {
+        var conditions = new List<Condition>();
+
+        if (!string.IsNullOrWhiteSpace(AutomationId))
+        {
+            conditions.Add(new PropertyCondition(AutomationElement.AutomationIdProperty, AutomationId));
+        }
+
+        if (!string.IsNullOrWhiteSpace(Name))
+        {
+            conditions.Add(new PropertyCondition(AutomationElement.NameProperty, Name));
+        }
+
+        if (!string.IsNullOrWhiteSpace(ClassName))
+        {
+            conditions.Add(new PropertyCondition(AutomationElement.ClassNameProperty, ClassName));
+        }
+
+        if (ControlType is not null)
+        {
+            conditions.Add(new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType));
+        }
+
+        if (IsEnabled is not null)
+        {
+            conditions.Add(new PropertyCondition(AutomationElement.IsEnabledProperty, IsEnabled));
+        }
+
+        if (IsOffscreen is not null)
+        {
+            conditions.Add(new PropertyCondition(AutomationElement.IsOffscreenProperty, IsOffscreen));
+        }
+
+        if (conditions.Count == 0)
+        {
+            return Condition.TrueCondition;
+        }
+
+        if (conditions.Count == 1)
+        {
+            return conditions[0];
+        }
+
+        return new AndCondition(conditions.ToArray());
+    }
+
+    private static Rectangle ToRectangle(System.Windows.Rect rect)
+    {
+        return Rectangle.FromLTRB(
+            (int)rect.Left,
+            (int)rect.Top,
+            (int)rect.Right,
+            (int)rect.Bottom);
     }
 }
+
 

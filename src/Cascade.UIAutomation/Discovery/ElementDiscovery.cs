@@ -1,189 +1,194 @@
-using System.Diagnostics;
-using System.Runtime.InteropServices;
 using Cascade.UIAutomation.Elements;
-using Cascade.UIAutomation.Enums;
-using Cascade.UIAutomation.Exceptions;
-using Cascade.UIAutomation.Interop;
+using Cascade.UIAutomation.Services;
+using Cascade.UIAutomation.Session;
+using Microsoft.Extensions.Logging;
+using System.Diagnostics;
+using System.IO;
+using System.Windows.Automation;
+using System.Linq;
 
 namespace Cascade.UIAutomation.Discovery;
 
-/// <summary>
-/// Implementation of IElementDiscovery for discovering UI elements.
-/// </summary>
-public class ElementDiscovery : IElementDiscovery
+public sealed class ElementDiscovery : IElementDiscovery
 {
-    private readonly IUIAutomationWrapper _automation;
+    private readonly SessionContext _context;
     private readonly ElementFactory _factory;
-    private readonly TimeSpan _defaultPollingInterval = TimeSpan.FromMilliseconds(100);
+    private readonly UIAutomationOptions _options;
+    private readonly ILogger<ElementDiscovery>? _logger;
 
-    [DllImport("user32.dll", EntryPoint = "GetForegroundWindow")]
-    private static extern IntPtr NativeGetForegroundWindow();
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="ElementDiscovery"/> class.
-    /// </summary>
-    /// <param name="automation">The UI Automation wrapper.</param>
-    /// <param name="factory">The element factory.</param>
-    public ElementDiscovery(IUIAutomationWrapper automation, ElementFactory factory)
+    public ElementDiscovery(
+        SessionContext context,
+        ElementFactory factory,
+        UIAutomationOptions options,
+        ILogger<ElementDiscovery>? logger = null)
     {
-        _automation = automation ?? throw new ArgumentNullException(nameof(automation));
+        _context = context ?? throw new ArgumentNullException(nameof(context));
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
+        _options = options ?? new UIAutomationOptions();
+        _logger = logger;
     }
 
-    /// <inheritdoc />
-    public IUIElement GetDesktopRoot()
-    {
-        var root = _automation.GetRootElement();
-        return _factory.Create(root)!;
-    }
+    public IUIElement GetDesktopRoot() => _factory.Create(_context.RootElement);
 
-    /// <inheritdoc />
-    public IUIElement? GetFocusedElement()
-    {
-        var focused = _automation.GetFocusedElement();
-        return _factory.Create(focused);
-    }
-
-    /// <inheritdoc />
     public IUIElement? GetForegroundWindow()
     {
-        var hwnd = NativeGetForegroundWindow();
-        if (hwnd == IntPtr.Zero)
-            return null;
+        try
+        {
+            var condition = new PropertyCondition(AutomationElement.HasKeyboardFocusProperty, true);
+            var focused = _context.RootElement.FindFirst(TreeScope.Subtree, condition);
+            if (focused is null)
+            {
+                return null;
+            }
 
-        return ElementFromHandle(hwnd);
+            var window = System.Windows.Automation.TreeWalker.ControlViewWalker.GetParent(focused);
+            return window is null ? null : _factory.Create(window);
+        }
+        catch (ElementNotAvailableException)
+        {
+            return null;
+        }
     }
 
-    /// <inheritdoc />
     public IUIElement? FindWindow(string title)
     {
-        if (string.IsNullOrEmpty(title))
-            return null;
-
-        var criteria = SearchCriteria.ByName(title)
-            .And(SearchCriteria.ByControlType(ControlType.Window));
-
-        return FindElement(criteria);
+        return GetAllWindows().FirstOrDefault(window =>
+            string.Equals(window.Name, title, StringComparison.OrdinalIgnoreCase));
     }
 
-    /// <inheritdoc />
     public IUIElement? FindWindow(Func<IUIElement, bool> predicate)
     {
-        if (predicate == null)
-            throw new ArgumentNullException(nameof(predicate));
-
-        var windows = GetAllWindows();
-        return windows.FirstOrDefault(predicate);
+        if (predicate is null) throw new ArgumentNullException(nameof(predicate));
+        return GetAllWindows().FirstOrDefault(predicate);
     }
 
-    /// <inheritdoc />
     public IReadOnlyList<IUIElement> GetAllWindows()
     {
-        var root = GetDesktopRoot();
-        var criteria = SearchCriteria.ByControlType(ControlType.Window);
-        var condition = _automation.CreateCondition(criteria);
-        var results = _automation.FindAll(
-            ((UIElement)root).NativeElement,
+        var windows = _context.RootElement.FindAll(
             TreeScope.Children,
-            condition);
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window));
 
-        return results.Select(e => _factory.Create(e)!).ToList();
+        return _factory.CreateMany(windows);
     }
 
-    /// <inheritdoc />
     public IUIElement? GetMainWindow(int processId)
     {
-        var criteria = SearchCriteria.ByProcessId(processId)
-            .And(SearchCriteria.ByControlType(ControlType.Window));
-
-        var root = GetDesktopRoot();
-        var condition = _automation.CreateCondition(criteria);
-        var result = _automation.FindFirst(
-            ((UIElement)root).NativeElement,
-            TreeScope.Children,
-            condition);
-
-        return _factory.Create(result);
-    }
-
-    /// <inheritdoc />
-    public IUIElement? GetMainWindow(string processName)
-    {
-        if (string.IsNullOrEmpty(processName))
-            return null;
-
-        var processes = Process.GetProcessesByName(processName.Replace(".exe", "", StringComparison.OrdinalIgnoreCase));
-        if (processes.Length == 0)
-            return null;
-
-        return GetMainWindow(processes[0].Id);
-    }
-
-    /// <inheritdoc />
-    public IUIElement? FindElement(SearchCriteria criteria, TimeSpan? timeout = null)
-    {
-        if (timeout.HasValue && timeout.Value > TimeSpan.Zero)
+        if (processId <= 0)
         {
-            return WaitForElementAsync(criteria, timeout.Value).GetAwaiter().GetResult();
+            return null;
         }
 
-        var root = GetDesktopRoot();
-        return root.FindFirst(criteria);
+        return GetAllWindows().FirstOrDefault(window => window.ProcessId == processId);
     }
 
-    /// <inheritdoc />
+    public IUIElement? GetMainWindow(string processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName))
+        {
+            return null;
+        }
+
+        var normalized = System.IO.Path.GetFileNameWithoutExtension(processName);
+        return GetAllWindows().FirstOrDefault(window =>
+        {
+            try
+            {
+                var process = Process.GetProcessById(window.ProcessId);
+                return string.Equals(process.ProcessName, normalized, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        });
+    }
+
+    public IUIElement? FindElement(SearchCriteria criteria, TimeSpan? timeout = null)
+    {
+        if (criteria is null) throw new ArgumentNullException(nameof(criteria));
+        var native = FindElementInternal(criteria, timeout ?? _options.DefaultTimeout);
+        return native is null ? null : _factory.Create(native);
+    }
+
     public IReadOnlyList<IUIElement> FindAllElements(SearchCriteria criteria)
     {
-        var root = GetDesktopRoot();
-        return root.FindAll(criteria);
+        if (criteria is null) throw new ArgumentNullException(nameof(criteria));
+        var elements = EnumerateMatches(criteria).Select(_factory.Create).ToList();
+        return elements;
     }
 
-    /// <inheritdoc />
     public async Task<IUIElement?> WaitForElementAsync(SearchCriteria criteria, TimeSpan timeout)
     {
+        if (criteria is null) throw new ArgumentNullException(nameof(criteria));
+
         var stopwatch = Stopwatch.StartNew();
 
         while (stopwatch.Elapsed < timeout)
         {
-            var element = FindElement(criteria);
-            if (element != null)
+            var element = FindElement(criteria, TimeSpan.Zero);
+            if (element is not null)
+            {
                 return element;
+            }
 
-            await Task.Delay(_defaultPollingInterval);
+            await Task.Delay(_options.ElementWaitPollingInterval).ConfigureAwait(false);
         }
 
         return null;
     }
 
-    /// <inheritdoc />
     public async Task<bool> WaitForElementGoneAsync(SearchCriteria criteria, TimeSpan timeout)
     {
+        if (criteria is null) throw new ArgumentNullException(nameof(criteria));
+
         var stopwatch = Stopwatch.StartNew();
 
         while (stopwatch.Elapsed < timeout)
         {
-            var element = FindElement(criteria);
-            if (element == null)
+            var element = FindElement(criteria, TimeSpan.Zero);
+            if (element is null)
+            {
                 return true;
+            }
 
-            await Task.Delay(_defaultPollingInterval);
+            await Task.Delay(_options.ElementWaitPollingInterval).ConfigureAwait(false);
         }
 
         return false;
     }
 
-    /// <inheritdoc />
-    public IUIElement? ElementFromPoint(int x, int y)
+    private AutomationElement? FindElementInternal(SearchCriteria? criteria, TimeSpan timeout)
     {
-        var element = _automation.ElementFromPoint(x, y);
-        return _factory.Create(element);
+        var stopwatch = Stopwatch.StartNew();
+
+        while (stopwatch.Elapsed <= timeout)
+        {
+            var match = EnumerateMatches(criteria).FirstOrDefault();
+            if (match is not null)
+            {
+                return match;
+            }
+
+            Thread.Sleep(_options.ElementWaitPollingInterval);
+        }
+
+        _logger?.LogWarning("Element not found after {Timeout}ms using criteria {@Criteria}", timeout.TotalMilliseconds, criteria);
+        return null;
     }
 
-    /// <inheritdoc />
-    public IUIElement? ElementFromHandle(IntPtr hwnd)
+    private IEnumerable<AutomationElement> EnumerateMatches(SearchCriteria? criteria)
     {
-        var element = _automation.ElementFromHandle(hwnd);
-        return _factory.Create(element);
+        var condition = criteria?.ToAutomationCondition() ?? Condition.TrueCondition;
+        var results = _context.RootElement.FindAll(TreeScope.Subtree, condition);
+
+        foreach (AutomationElement element in results)
+        {
+            if (criteria is null || criteria.Match(element))
+            {
+                yield return element;
+            }
+        }
     }
 }
+
 

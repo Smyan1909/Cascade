@@ -1,20 +1,9 @@
-using Cascade.UIAutomation.Enums;
-
 namespace Cascade.UIAutomation.Patterns;
 
-/// <summary>
-/// Provides access to controls that can cycle through states.
-/// </summary>
-public interface ITogglePattern
+public interface ITogglePattern : IPatternProvider<System.Windows.Automation.TogglePattern>
 {
-    /// <summary>
-    /// Gets the current toggle state.
-    /// </summary>
-    ToggleState ToggleState { get; }
-
-    /// <summary>
-    /// Cycles through the toggle states.
-    /// </summary>
+    System.Windows.Automation.ToggleState ToggleState { get; }
     Task ToggleAsync();
 }
+
 

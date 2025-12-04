@@ -1,270 +1,156 @@
 using Cascade.UIAutomation.Elements;
-using Cascade.UIAutomation.Interop;
+using Cascade.UIAutomation.Models;
+using Microsoft.Extensions.Logging;
+using System.Windows.Automation;
 
 namespace Cascade.UIAutomation.TreeWalker;
 
-/// <summary>
-/// Implementation of ITreeWalker for navigating the UI element tree.
-/// </summary>
-public class UITreeWalker : ITreeWalker
+public sealed class UITreeWalker : ITreeWalker
 {
-    private readonly IUIAutomationWrapper _automation;
+    private readonly System.Windows.Automation.TreeWalker _walker;
     private readonly ElementFactory _factory;
-    private readonly object _nativeWalker;
+    private readonly ILogger<UITreeWalker>? _logger;
     private readonly Func<IUIElement, bool>? _filter;
-    private readonly TreeViewType _viewType;
 
-    private UITreeWalker? _controlViewWalker;
-    private UITreeWalker? _contentViewWalker;
-    private UITreeWalker? _rawViewWalker;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="UITreeWalker"/> class with control view.
-    /// </summary>
-    public UITreeWalker(IUIAutomationWrapper automation, ElementFactory factory)
-        : this(automation, factory, TreeViewType.Control)
+    public UITreeWalker(
+        ElementFactory factory,
+        System.Windows.Automation.TreeWalker walker,
+        ILogger<UITreeWalker>? logger = null,
+        Func<IUIElement, bool>? filter = null)
     {
-    }
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="UITreeWalker"/> class with specified view.
-    /// </summary>
-    public UITreeWalker(IUIAutomationWrapper automation, ElementFactory factory, TreeViewType viewType)
-    {
-        _automation = automation ?? throw new ArgumentNullException(nameof(automation));
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
-        _viewType = viewType;
-        _nativeWalker = viewType switch
-        {
-            TreeViewType.Control => _automation.CreateControlViewWalker(),
-            TreeViewType.Content => _automation.CreateContentViewWalker(),
-            TreeViewType.Raw => _automation.CreateRawViewWalker(),
-            _ => _automation.CreateControlViewWalker()
-        };
-    }
-
-    /// <summary>
-    /// Initializes a new instance with a custom filter.
-    /// </summary>
-    private UITreeWalker(IUIAutomationWrapper automation, ElementFactory factory, object nativeWalker, Func<IUIElement, bool>? filter)
-    {
-        _automation = automation;
-        _factory = factory;
-        _nativeWalker = nativeWalker;
+        _walker = walker ?? throw new ArgumentNullException(nameof(walker));
+        _logger = logger;
         _filter = filter;
-        _viewType = TreeViewType.Custom;
     }
 
-    /// <inheritdoc />
-    public IUIElement? GetParent(IUIElement element)
+    public ITreeWalker ControlViewWalker => new UITreeWalker(_factory, System.Windows.Automation.TreeWalker.ControlViewWalker, _logger, _filter);
+    public ITreeWalker ContentViewWalker => new UITreeWalker(_factory, System.Windows.Automation.TreeWalker.ContentViewWalker, _logger, _filter);
+    public ITreeWalker RawViewWalker => new UITreeWalker(_factory, System.Windows.Automation.TreeWalker.RawViewWalker, _logger, _filter);
+
+    public ITreeWalker WithFilter(Func<IUIElement, bool> filter)
     {
-        var nativeElement = GetNativeElement(element);
-        var parent = _automation.GetParent(nativeElement, _nativeWalker);
-        var result = _factory.Create(parent);
-
-        if (_filter != null && result != null && !_filter(result))
-            return GetParent(result); // Skip filtered elements
-
-        return result;
+        return new UITreeWalker(_factory, _walker, _logger, filter);
     }
 
-    /// <inheritdoc />
-    public IUIElement? GetFirstChild(IUIElement element)
-    {
-        var nativeElement = GetNativeElement(element);
-        var child = _automation.GetFirstChild(nativeElement, _nativeWalker);
-        var result = _factory.Create(child);
+    public IUIElement? GetParent(IUIElement element) => Wrap(_walker.GetParent(GetNative(element)));
 
-        if (_filter != null && result != null && !_filter(result))
-            return GetNextSibling(result); // Skip filtered elements
+    public IUIElement? GetFirstChild(IUIElement element) => Wrap(_walker.GetFirstChild(GetNative(element)));
 
-        return result;
-    }
+    public IUIElement? GetLastChild(IUIElement element) => Wrap(_walker.GetLastChild(GetNative(element)));
 
-    /// <inheritdoc />
-    public IUIElement? GetLastChild(IUIElement element)
-    {
-        var nativeElement = GetNativeElement(element);
-        var child = _automation.GetLastChild(nativeElement, _nativeWalker);
-        var result = _factory.Create(child);
+    public IUIElement? GetNextSibling(IUIElement element) => Wrap(_walker.GetNextSibling(GetNative(element)));
 
-        if (_filter != null && result != null && !_filter(result))
-            return GetPreviousSibling(result); // Skip filtered elements
+    public IUIElement? GetPreviousSibling(IUIElement element) => Wrap(_walker.GetPreviousSibling(GetNative(element)));
 
-        return result;
-    }
-
-    /// <inheritdoc />
-    public IUIElement? GetNextSibling(IUIElement element)
-    {
-        var nativeElement = GetNativeElement(element);
-        var sibling = _automation.GetNextSibling(nativeElement, _nativeWalker);
-        var result = _factory.Create(sibling);
-
-        if (_filter != null && result != null && !_filter(result))
-            return GetNextSibling(result); // Skip filtered elements
-
-        return result;
-    }
-
-    /// <inheritdoc />
-    public IUIElement? GetPreviousSibling(IUIElement element)
-    {
-        var nativeElement = GetNativeElement(element);
-        var sibling = _automation.GetPreviousSibling(nativeElement, _nativeWalker);
-        var result = _factory.Create(sibling);
-
-        if (_filter != null && result != null && !_filter(result))
-            return GetPreviousSibling(result); // Skip filtered elements
-
-        return result;
-    }
-
-    /// <inheritdoc />
     public IEnumerable<IUIElement> GetChildren(IUIElement element)
     {
-        var child = GetFirstChild(element);
-        while (child != null)
+        var native = GetNative(element);
+        var child = _walker.GetFirstChild(native);
+        while (child is not null)
         {
-            yield return child;
-            child = GetNextSibling(child);
+            var wrapped = Wrap(child);
+            if (wrapped is not null)
+            {
+                yield return wrapped;
+            }
+
+            child = _walker.GetNextSibling(child);
         }
     }
 
-    /// <inheritdoc />
     public IEnumerable<IUIElement> GetDescendants(IUIElement element, int maxDepth = -1)
     {
-        return GetDescendantsRecursive(element, 0, maxDepth);
-    }
-
-    private IEnumerable<IUIElement> GetDescendantsRecursive(IUIElement element, int currentDepth, int maxDepth)
-    {
-        if (maxDepth >= 0 && currentDepth >= maxDepth)
-            yield break;
-
         foreach (var child in GetChildren(element))
         {
             yield return child;
 
-            foreach (var descendant in GetDescendantsRecursive(child, currentDepth + 1, maxDepth))
+            if (maxDepth == 0)
+            {
+                continue;
+            }
+
+            foreach (var descendant in GetDescendants(child, maxDepth < 0 ? -1 : maxDepth - 1))
             {
                 yield return descendant;
             }
         }
     }
 
-    /// <inheritdoc />
     public IEnumerable<IUIElement> GetAncestors(IUIElement element)
     {
         var parent = GetParent(element);
-        while (parent != null)
+        while (parent is not null)
         {
             yield return parent;
             parent = GetParent(parent);
         }
     }
 
-    /// <inheritdoc />
-    public ITreeWalker WithFilter(Func<IUIElement, bool> filter)
-    {
-        return new UITreeWalker(_automation, _factory, _nativeWalker, filter);
-    }
-
-    /// <inheritdoc />
-    public ITreeWalker ControlViewWalker
-    {
-        get
-        {
-            _controlViewWalker ??= new UITreeWalker(_automation, _factory, TreeViewType.Control);
-            return _controlViewWalker;
-        }
-    }
-
-    /// <inheritdoc />
-    public ITreeWalker ContentViewWalker
-    {
-        get
-        {
-            _contentViewWalker ??= new UITreeWalker(_automation, _factory, TreeViewType.Content);
-            return _contentViewWalker;
-        }
-    }
-
-    /// <inheritdoc />
-    public ITreeWalker RawViewWalker
-    {
-        get
-        {
-            _rawViewWalker ??= new UITreeWalker(_automation, _factory, TreeViewType.Raw);
-            return _rawViewWalker;
-        }
-    }
-
-    /// <inheritdoc />
     public TreeSnapshot CaptureSnapshot(IUIElement root, int maxDepth = -1)
     {
-        var startTime = DateTime.UtcNow;
-        int totalElements = 0;
-        int actualMaxDepth = 0;
-
-        var rootSnapshot = CaptureElementSnapshot(root, 0, maxDepth, ref totalElements, ref actualMaxDepth);
-
-        return new TreeSnapshot(rootSnapshot, startTime, totalElements, actualMaxDepth);
+        var snapshot = BuildSnapshot(root, maxDepth);
+        return new TreeSnapshot
+        {
+            Root = snapshot.snapshot,
+            CapturedAt = DateTime.UtcNow,
+            TotalElements = snapshot.count
+        };
     }
 
-    private ElementSnapshot CaptureElementSnapshot(IUIElement element, int currentDepth, int maxDepth, ref int totalElements, ref int actualMaxDepth)
+    private (ElementSnapshot snapshot, int count) BuildSnapshot(IUIElement element, int depthRemaining)
     {
-        totalElements++;
-        if (currentDepth > actualMaxDepth)
-            actualMaxDepth = currentDepth;
+        var childSnapshots = new List<ElementSnapshot>();
+        var count = 1;
 
-        var snapshot = element.ToSnapshot();
-        snapshot.Depth = currentDepth;
-
-        if (maxDepth < 0 || currentDepth < maxDepth)
+        if (depthRemaining != 0)
         {
             foreach (var child in GetChildren(element))
             {
-                var childSnapshot = CaptureElementSnapshot(child, currentDepth + 1, maxDepth, ref totalElements, ref actualMaxDepth);
-                snapshot.Children.Add(childSnapshot);
+                var (snapshot, childCount) = BuildSnapshot(child, depthRemaining < 0 ? -1 : depthRemaining - 1);
+                childSnapshots.Add(snapshot);
+                count += childCount;
             }
         }
 
-        return snapshot;
+        var elementSnapshot = new ElementSnapshot
+        {
+            RuntimeId = element.RuntimeId,
+            AutomationId = element.AutomationId,
+            Name = element.Name,
+            ClassName = element.ClassName,
+            ControlType = element.ControlType.ProgrammaticName,
+            BoundingRectangle = element.BoundingRectangle,
+            IsEnabled = element.IsEnabled,
+            IsOffscreen = element.IsOffscreen,
+            SupportedPatterns = element.SupportedPatterns.Select(p => p.ToString()).ToList(),
+            Children = childSnapshots
+        };
+
+        return (elementSnapshot, count);
     }
 
-    private static object GetNativeElement(IUIElement element)
+    private AutomationElement GetNative(IUIElement element)
     {
-        if (element is UIElement uiElement)
-            return uiElement.NativeElement;
+        return (element as UIElement)?.AutomationElement
+            ?? throw new InvalidOperationException("The provided element is not managed by this factory.");
+    }
 
-        throw new ArgumentException("Element must be a UIElement instance", nameof(element));
+    private IUIElement? Wrap(AutomationElement? element)
+    {
+        if (element is null)
+        {
+            return null;
+        }
+
+        var wrapped = _factory.Create(element);
+        if (_filter is null || _filter(wrapped))
+        {
+            return wrapped;
+        }
+
+        return null;
     }
 }
 
-/// <summary>
-/// Types of tree views.
-/// </summary>
-public enum TreeViewType
-{
-    /// <summary>
-    /// Control view - excludes non-interactive elements.
-    /// </summary>
-    Control,
-
-    /// <summary>
-    /// Content view - only content-relevant elements.
-    /// </summary>
-    Content,
-
-    /// <summary>
-    /// Raw view - all elements.
-    /// </summary>
-    Raw,
-
-    /// <summary>
-    /// Custom filtered view.
-    /// </summary>
-    Custom
-}
 

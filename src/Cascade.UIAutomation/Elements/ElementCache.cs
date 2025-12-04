@@ -1,187 +1,118 @@
+using Cascade.UIAutomation.Session;
 using System.Collections.Concurrent;
 
 namespace Cascade.UIAutomation.Elements;
 
-/// <summary>
-/// Provides caching for UI elements to improve performance.
-/// </summary>
-public class ElementCache
+public sealed class ElementCache
 {
-    private readonly ConcurrentDictionary<string, CachedElement> _cache = new();
-    private readonly object _cleanupLock = new();
-    private DateTime _lastCleanup = DateTime.UtcNow;
+    private readonly ConcurrentDictionary<string, CacheEntry> _entries = new();
+    private readonly Func<IUIElement, Task<IUIElement?>> _refresher;
 
-    /// <summary>
-    /// Gets or sets the default cache duration.
-    /// </summary>
+    public ElementCache(SessionHandle session, Func<IUIElement, Task<IUIElement?>> refresher)
+    {
+        Session = session ?? throw new ArgumentNullException(nameof(session));
+        _refresher = refresher ?? throw new ArgumentNullException(nameof(refresher));
+    }
+
+    public SessionHandle Session { get; }
+
     public TimeSpan DefaultCacheDuration { get; set; } = TimeSpan.FromSeconds(5);
-
-    /// <summary>
-    /// Gets or sets the maximum number of cached elements.
-    /// </summary>
     public int MaxCachedElements { get; set; } = 1000;
+    public bool EnableCaching { get; set; } = true;
 
-    /// <summary>
-    /// Gets or sets the cleanup interval.
-    /// </summary>
-    public TimeSpan CleanupInterval { get; set; } = TimeSpan.FromSeconds(30);
-
-    /// <summary>
-    /// Gets the current number of cached elements.
-    /// </summary>
-    public int Count => _cache.Count;
-
-    /// <summary>
-    /// Gets a cached element by its runtime ID.
-    /// </summary>
-    /// <param name="runtimeId">The runtime ID of the element.</param>
-    /// <returns>The cached element, or null if not found or expired.</returns>
     public IUIElement? GetCached(string runtimeId)
     {
-        if (string.IsNullOrEmpty(runtimeId))
-            return null;
-
-        if (_cache.TryGetValue(runtimeId, out var cached))
+        if (!EnableCaching)
         {
-            if (cached.IsExpired)
-            {
-                _cache.TryRemove(runtimeId, out _);
-                return null;
-            }
-            return cached.Element;
+            return null;
         }
 
+        if (string.IsNullOrWhiteSpace(runtimeId))
+        {
+            return null;
+        }
+
+        if (_entries.TryGetValue(runtimeId, out var entry) && entry.ExpiresAt > DateTimeOffset.UtcNow)
+        {
+            return entry.Element;
+        }
+
+        _entries.TryRemove(runtimeId, out _);
         return null;
     }
 
-    /// <summary>
-    /// Caches an element.
-    /// </summary>
-    /// <param name="element">The element to cache.</param>
-    /// <param name="duration">Optional custom cache duration.</param>
     public void Cache(IUIElement element, TimeSpan? duration = null)
     {
-        if (element == null || string.IsNullOrEmpty(element.RuntimeId))
-            return;
-
-        TriggerCleanupIfNeeded();
-
-        // Evict oldest entries if at capacity
-        while (_cache.Count >= MaxCachedElements)
+        if (!EnableCaching)
         {
-            var oldest = _cache.OrderBy(kvp => kvp.Value.CachedAt).FirstOrDefault();
-            if (oldest.Key != null)
-                _cache.TryRemove(oldest.Key, out _);
+            return;
         }
 
-        var cached = new CachedElement(element, duration ?? DefaultCacheDuration);
-        _cache.AddOrUpdate(element.RuntimeId, cached, (_, _) => cached);
+        var key = element?.RuntimeId;
+        if (element is null || string.IsNullOrWhiteSpace(key))
+        {
+            return;
+        }
+
+        var expiresAt = DateTimeOffset.UtcNow + (duration ?? DefaultCacheDuration);
+        _entries[key] = new CacheEntry(element, expiresAt);
+        EvictIfNeeded();
     }
 
-    /// <summary>
-    /// Invalidates a cached element by its runtime ID.
-    /// </summary>
-    /// <param name="runtimeId">The runtime ID of the element to invalidate.</param>
     public void Invalidate(string runtimeId)
     {
-        if (!string.IsNullOrEmpty(runtimeId))
-            _cache.TryRemove(runtimeId, out _);
+        if (string.IsNullOrWhiteSpace(runtimeId))
+        {
+            return;
+        }
+
+        _entries.TryRemove(runtimeId, out _);
     }
 
-    /// <summary>
-    /// Invalidates all cached elements.
-    /// </summary>
-    public void InvalidateAll()
-    {
-        _cache.Clear();
-    }
+    public void InvalidateAll() => _entries.Clear();
 
-    /// <summary>
-    /// Checks if an element's cached data is stale.
-    /// </summary>
-    /// <param name="element">The element to check.</param>
-    /// <returns>True if the cache is stale or element is not cached.</returns>
     public bool IsStale(IUIElement element)
     {
-        if (element == null || string.IsNullOrEmpty(element.RuntimeId))
-            return true;
-
-        if (_cache.TryGetValue(element.RuntimeId, out var cached))
+        if (!EnableCaching)
         {
-            return cached.IsExpired;
+            return true;
         }
 
-        return true;
+        if (element is null || string.IsNullOrWhiteSpace(element.RuntimeId))
+        {
+            return true;
+        }
+
+        return !_entries.TryGetValue(element.RuntimeId, out var entry) || entry.ExpiresAt <= DateTimeOffset.UtcNow;
     }
 
-    /// <summary>
-    /// Refreshes an element by removing it from cache and re-validating.
-    /// </summary>
-    /// <param name="element">The element to refresh.</param>
-    /// <returns>The same element if still valid, or null if invalid.</returns>
     public Task<IUIElement?> RefreshAsync(IUIElement element)
     {
-        return Task.Run(() =>
-        {
-            if (element == null)
-                return null;
-
-            // Invalidate current cache
-            Invalidate(element.RuntimeId);
-
-            // Try to verify the element is still valid by accessing a property
-            try
-            {
-                _ = element.IsEnabled;
-                Cache(element);
-                return element;
-            }
-            catch
-            {
-                return null;
-            }
-        });
+        return _refresher(element);
     }
 
-    private void TriggerCleanupIfNeeded()
+    private void EvictIfNeeded()
     {
-        if (DateTime.UtcNow - _lastCleanup < CleanupInterval)
+        if (!EnableCaching)
+        {
             return;
+        }
 
-        lock (_cleanupLock)
+        while (_entries.Count > MaxCachedElements)
         {
-            if (DateTime.UtcNow - _lastCleanup < CleanupInterval)
-                return;
-
-            _lastCleanup = DateTime.UtcNow;
-
-            // Remove expired entries
-            var expiredKeys = _cache
-                .Where(kvp => kvp.Value.IsExpired)
-                .Select(kvp => kvp.Key)
-                .ToList();
-
-            foreach (var key in expiredKeys)
+            var oldest = _entries.OrderBy(kvp => kvp.Value.ExpiresAt).FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(oldest.Key))
             {
-                _cache.TryRemove(key, out _);
+                _entries.TryRemove(oldest.Key, out _);
+            }
+            else
+            {
+                break;
             }
         }
     }
 
-    private class CachedElement
-    {
-        public IUIElement Element { get; }
-        public DateTime CachedAt { get; }
-        public DateTime ExpiresAt { get; }
-
-        public CachedElement(IUIElement element, TimeSpan duration)
-        {
-            Element = element;
-            CachedAt = DateTime.UtcNow;
-            ExpiresAt = CachedAt + duration;
-        }
-
-        public bool IsExpired => DateTime.UtcNow >= ExpiresAt;
-    }
+    private sealed record CacheEntry(IUIElement Element, DateTimeOffset ExpiresAt);
 }
+
 

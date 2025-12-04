@@ -1,342 +1,193 @@
 using System.Diagnostics;
-using System.Drawing;
+using System.Linq;
 using Cascade.Vision.Capture;
-using Cascade.Vision.Processing;
 using Tesseract;
 
 namespace Cascade.Vision.OCR;
 
-/// <summary>
-/// OCR engine using Tesseract (via Tesseract.NET).
-/// Provides broad language support and high configurability.
-/// </summary>
-public class TesseractOcrEngine : IOcrEngine, IDisposable
+public sealed class TesseractOcrEngine : IOcrEngine, IDisposable
 {
     private TesseractEngine? _engine;
-    private bool _disposed;
-    private readonly object _lock = new();
 
-    /// <summary>
-    /// Gets or sets the path to the tessdata directory.
-    /// </summary>
-    public string TessDataPath { get; set; } = "./tessdata";
+    public TesseractOcrEngine(OcrOptions? options = null)
+    {
+        Options = options ?? new OcrOptions();
+    }
 
-    /// <summary>
-    /// Gets or sets the character whitelist (only recognize these characters).
-    /// </summary>
+    public string EngineName => "Tesseract";
+    public IReadOnlyList<string> SupportedLanguages => new[] { Options.Language };
+    public bool IsAvailable => TryEnsureEngine();
+    public OcrOptions Options { get; set; }
+
+    public string TessDataPath { get; set; } = Path.Combine(AppContext.BaseDirectory, "tessdata");
     public string? Whitelist { get; set; }
-
-    /// <summary>
-    /// Gets or sets the character blacklist (don't recognize these characters).
-    /// </summary>
     public string? Blacklist { get; set; }
 
-    /// <inheritdoc />
-    public string EngineName => "Tesseract";
+    public Task<OcrResult> RecognizeAsync(CaptureResult capture, CancellationToken cancellationToken = default)
+        => RecognizeAsync(capture.ImageData, cancellationToken);
 
-    /// <inheritdoc />
-    public OcrOptions Options { get; set; } = new();
-
-    /// <inheritdoc />
-    public IReadOnlyList<string> SupportedLanguages => GetAvailableLanguages();
-
-    /// <inheritdoc />
-    public bool IsAvailable => CheckAvailability();
-
-    /// <inheritdoc />
-    public int Priority => 2; // Second priority (after Windows OCR)
-
-    /// <inheritdoc />
     public async Task<OcrResult> RecognizeAsync(byte[] imageData, CancellationToken cancellationToken = default)
     {
-        return await Task.Run(() => RecognizeCore(imageData), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!TryEnsureEngine())
+        {
+            return EmptyResult("Engine unavailable");
+        }
+
+        using var pix = Pix.LoadFromMemory(imageData);
+        return await Task.Run(() => ProcessPix(pix), cancellationToken);
     }
 
-    /// <inheritdoc />
     public async Task<OcrResult> RecognizeAsync(string imagePath, CancellationToken cancellationToken = default)
     {
-        var imageData = await File.ReadAllBytesAsync(imagePath, cancellationToken);
-        return await RecognizeAsync(imageData, cancellationToken);
+        var data = await File.ReadAllBytesAsync(imagePath, cancellationToken);
+        return await RecognizeAsync(data, cancellationToken);
     }
 
-    /// <inheritdoc />
-    public Task<OcrResult> RecognizeAsync(CaptureResult capture, CancellationToken cancellationToken = default)
-    {
-        return RecognizeAsync(capture.ImageData, cancellationToken);
-    }
-
-    /// <inheritdoc />
     public async Task<OcrResult> RecognizeRegionAsync(byte[] imageData, Rectangle region, CancellationToken cancellationToken = default)
     {
-        return await Task.Run(() =>
-        {
-            // Crop the image first using ImageProcessor
-            var processor = new ImageProcessor();
-            var croppedData = processor.Crop(imageData, region);
-            
-            using var pix = LoadPix(croppedData);
-            if (pix == null)
-                return OcrResult.Empty(EngineName);
-
-            return RecognizePixCore(pix, region.X, region.Y);
-        }, cancellationToken);
+        using var stream = new MemoryStream(imageData);
+        using var bitmap = new Bitmap(stream);
+        var safeRegion = RegionSelector.ClampToBounds(region, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
+        using var cropped = bitmap.Clone(safeRegion, bitmap.PixelFormat);
+        using var ms = new MemoryStream();
+        cropped.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+        return await RecognizeAsync(ms.ToArray(), cancellationToken);
     }
 
-    private OcrResult RecognizeCore(byte[] imageData)
+    private OcrResult ProcessPix(Pix pix)
     {
-        using var pix = LoadPix(imageData);
-        if (pix == null)
-            return OcrResult.Empty(EngineName);
-
-        return RecognizePixCore(pix, 0, 0);
-    }
-
-    private OcrResult RecognizePixCore(Pix pix, int offsetX, int offsetY)
-    {
-        var sw = Stopwatch.StartNew();
-
-        try
-        {
-            EnsureEngine();
-            if (_engine == null)
-                return OcrResult.Empty(EngineName);
-
-            lock (_lock)
-            {
-                using var page = _engine.Process(pix, ConvertPageSegMode(Options.PageSegMode));
-                
-                var fullText = page.GetText();
-                var meanConfidence = page.GetMeanConfidence();
-
-                var lines = ExtractLines(page, offsetX, offsetY);
-                sw.Stop();
-
-                return new OcrResult
-                {
-                    FullText = fullText.Trim(),
-                    Confidence = meanConfidence,
-                    Lines = lines,
-                    ProcessingTime = sw.Elapsed,
-                    EngineUsed = EngineName
-                };
-            }
-        }
-        catch (Exception)
-        {
-            sw.Stop();
-            return OcrResult.Empty(EngineName);
-        }
-    }
-
-    private List<OcrLine> ExtractLines(Page page, int offsetX, int offsetY)
-    {
+        var engine = _engine ?? throw new InvalidOperationException("Tesseract engine not initialized.");
+        var stopwatch = Stopwatch.StartNew();
+        using var page = engine.Process(pix, MapPageSegMode(Options.PageSegMode));
+        var iterator = page.GetIterator();
         var lines = new List<OcrLine>();
+        var words = new List<OcrWord>();
 
-        try
+        if (iterator is not null)
         {
-            using var iterator = page.GetIterator();
             iterator.Begin();
-
             do
             {
-                if (iterator.TryGetBoundingBox(PageIteratorLevel.TextLine, out var lineBounds))
+                if (iterator.IsAtBeginningOf(PageIteratorLevel.TextLine))
                 {
-                    var lineText = iterator.GetText(PageIteratorLevel.TextLine);
-                    var lineConfidence = iterator.GetConfidence(PageIteratorLevel.TextLine) / 100.0;
+                    var lineText = iterator.GetText(PageIteratorLevel.TextLine) ?? string.Empty;
+                    var lineBounds = iterator.TryGetBoundingBox(PageIteratorLevel.TextLine, out var lb) ? lb.ToRectangle() : Rectangle.Empty;
+                    var lineWords = new List<OcrWord>();
 
-                    var words = ExtractWords(iterator, offsetX, offsetY);
+                    do
+                    {
+                        if (!iterator.TryGetBoundingBox(PageIteratorLevel.Word, out var wb))
+                        {
+                            continue;
+                        }
+
+                        var wordText = iterator.GetText(PageIteratorLevel.Word) ?? string.Empty;
+                        var confidence = iterator.Confidence(PageIteratorLevel.Word) / 100.0;
+                        var word = new OcrWord
+                        {
+                            Text = wordText.Trim(),
+                            BoundingBox = wb.ToRectangle(),
+                            Confidence = confidence
+                        };
+                        lineWords.Add(word);
+                        words.Add(word);
+                    }
+                    while (iterator.Next(PageIteratorLevel.TextLine, PageIteratorLevel.Word));
 
                     lines.Add(new OcrLine
                     {
-                        Text = lineText?.Trim() ?? string.Empty,
-                        BoundingBox = new Rectangle(
-                            lineBounds.X1 + offsetX,
-                            lineBounds.Y1 + offsetY,
-                            lineBounds.Width,
-                            lineBounds.Height),
-                        Confidence = lineConfidence,
-                        Words = words
+                        Text = lineText.Trim(),
+                        BoundingBox = lineBounds,
+                        Confidence = lineWords.Count == 0 ? 0 : lineWords.Average(w => w.Confidence),
+                        Words = lineWords
                     });
                 }
-            } while (iterator.Next(PageIteratorLevel.TextLine));
-        }
-        catch
-        {
-            // Fall back to simple text extraction if iteration fails
-        }
-
-        return lines;
-    }
-
-    private List<OcrWord> ExtractWords(ResultIterator lineIterator, int offsetX, int offsetY)
-    {
-        var words = new List<OcrWord>();
-
-        try
-        {
-            // Create a copy of the iterator to traverse words within this line
-            do
-            {
-                if (lineIterator.TryGetBoundingBox(PageIteratorLevel.Word, out var wordBounds))
-                {
-                    var wordText = lineIterator.GetText(PageIteratorLevel.Word);
-                    var wordConfidence = lineIterator.GetConfidence(PageIteratorLevel.Word) / 100.0;
-
-                    if (!string.IsNullOrWhiteSpace(wordText))
-                    {
-                        words.Add(new OcrWord
-                        {
-                            Text = wordText.Trim(),
-                            BoundingBox = new Rectangle(
-                                wordBounds.X1 + offsetX,
-                                wordBounds.Y1 + offsetY,
-                                wordBounds.Width,
-                                wordBounds.Height),
-                            Confidence = wordConfidence
-                        });
-                    }
-                }
-            } while (lineIterator.Next(PageIteratorLevel.Word) && 
-                     !lineIterator.IsAtBeginningOf(PageIteratorLevel.TextLine));
-        }
-        catch
-        {
-            // Ignore word extraction errors
-        }
-
-        return words;
-    }
-
-    private void EnsureEngine()
-    {
-        if (_engine != null)
-            return;
-
-        lock (_lock)
-        {
-            if (_engine != null)
-                return;
-
-            try
-            {
-                var language = MapLanguage(Options.Language);
-                _engine = new TesseractEngine(TessDataPath, language, EngineMode.Default);
-
-                // Apply configuration
-                if (!string.IsNullOrEmpty(Whitelist))
-                    _engine.SetVariable("tessedit_char_whitelist", Whitelist);
-
-                if (!string.IsNullOrEmpty(Blacklist))
-                    _engine.SetVariable("tessedit_char_blacklist", Blacklist);
             }
-            catch
-            {
-                _engine = null;
-            }
+            while (iterator.Next(PageIteratorLevel.Block, PageIteratorLevel.TextLine));
         }
-    }
 
-    private static Pix? LoadPix(byte[] imageData)
-    {
-        try
-        {
-            return Pix.LoadFromMemory(imageData);
-        }
-        catch
-        {
-            return null;
-        }
-    }
+        stopwatch.Stop();
 
-    private static PageSegMode ConvertPageSegMode(PageSegmentationMode mode)
-    {
-        return mode switch
+        return new OcrResult
         {
-            PageSegmentationMode.Auto => PageSegMode.Auto,
-            PageSegmentationMode.SingleBlock => PageSegMode.SingleBlock,
-            PageSegmentationMode.SingleColumn => PageSegMode.SingleColumn,
-            PageSegmentationMode.SingleLine => PageSegMode.SingleLine,
-            PageSegmentationMode.SingleWord => PageSegMode.SingleWord,
-            PageSegmentationMode.CircleWord => PageSegMode.CircleWord,
-            PageSegmentationMode.SingleChar => PageSegMode.SingleChar,
-            PageSegmentationMode.SparseText => PageSegMode.SparseText,
-            PageSegmentationMode.SparseTextOsd => PageSegMode.SparseTextOsd,
-            _ => PageSegMode.Auto
+            FullText = page.GetText() ?? string.Empty,
+            Confidence = page.GetMeanConfidence(),
+            Lines = lines,
+            Words = words,
+            EngineUsed = EngineName,
+            ProcessingTime = stopwatch.Elapsed
         };
     }
 
-    private static string MapLanguage(string language)
+    private bool TryEnsureEngine()
     {
-        // Map common language codes to Tesseract language codes
-        return language.ToLowerInvariant() switch
+        if (_engine is not null)
         {
-            "en-us" or "en-gb" or "en" => "eng",
-            "de-de" or "de" => "deu",
-            "fr-fr" or "fr" => "fra",
-            "es-es" or "es" => "spa",
-            "it-it" or "it" => "ita",
-            "pt-pt" or "pt-br" or "pt" => "por",
-            "nl-nl" or "nl" => "nld",
-            "pl-pl" or "pl" => "pol",
-            "ru-ru" or "ru" => "rus",
-            "ja-jp" or "ja" => "jpn",
-            "ko-kr" or "ko" => "kor",
-            "zh-cn" or "zh-tw" or "zh" => "chi_sim",
-            "ar-sa" or "ar" => "ara",
-            _ => "eng" // Default to English
-        };
-    }
+            return true;
+        }
 
-    private bool CheckAvailability()
-    {
+        if (!Directory.Exists(TessDataPath))
+        {
+            return false;
+        }
+
         try
         {
-            if (!Directory.Exists(TessDataPath))
-                return false;
+            _engine = new TesseractEngine(TessDataPath, Options.Language, EngineMode.Default);
+            if (!string.IsNullOrWhiteSpace(Whitelist))
+            {
+                _engine.SetVariable("tessedit_char_whitelist", Whitelist);
+            }
 
-            var language = MapLanguage(Options.Language);
-            var trainedDataPath = Path.Combine(TessDataPath, $"{language}.traineddata");
-            return File.Exists(trainedDataPath);
+            if (!string.IsNullOrWhiteSpace(Blacklist))
+            {
+                _engine.SetVariable("tessedit_char_blacklist", Blacklist);
+            }
+
+            return true;
         }
         catch
         {
+            _engine = null;
             return false;
         }
     }
 
-    private IReadOnlyList<string> GetAvailableLanguages()
+    private static PageSegMode MapPageSegMode(PageSegmentationMode segMode) => segMode switch
     {
-        try
-        {
-            if (!Directory.Exists(TessDataPath))
-                return Array.Empty<string>();
+        PageSegmentationMode.SingleBlock => PageSegMode.SingleBlock,
+        PageSegmentationMode.SingleColumn => PageSegMode.SingleColumn,
+        PageSegmentationMode.SingleLine => PageSegMode.SingleLine,
+        PageSegmentationMode.SingleWord => PageSegMode.SingleWord,
+        PageSegmentationMode.CircleWord => PageSegMode.CircleWord,
+        PageSegmentationMode.SingleChar => PageSegMode.SingleChar,
+        PageSegmentationMode.SparseText => PageSegMode.SparseText,
+        PageSegmentationMode.SparseTextOsd => PageSegMode.SparseTextOsd,
+        _ => PageSegMode.Auto
+    };
 
-            return Directory.GetFiles(TessDataPath, "*.traineddata")
-                .Select(f => Path.GetFileNameWithoutExtension(f))
-                .ToList();
-        }
-        catch
-        {
-            return Array.Empty<string>();
-        }
-    }
+    private OcrResult EmptyResult(string reason) => new()
+    {
+        FullText = string.Empty,
+        Confidence = 0,
+        EngineUsed = $"{EngineName} ({reason})",
+        Lines = Array.Empty<OcrLine>(),
+        Words = Array.Empty<OcrWord>(),
+        ProcessingTime = TimeSpan.Zero
+    };
 
-    /// <summary>
-    /// Disposes of the Tesseract engine.
-    /// </summary>
     public void Dispose()
     {
-        if (_disposed)
-            return;
-
-        lock (_lock)
-        {
-            _engine?.Dispose();
-            _engine = null;
-            _disposed = true;
-        }
-
-        GC.SuppressFinalize(this);
+        _engine?.Dispose();
+        _engine = null;
     }
 }
+
+internal static class RectExtensions
+{
+    public static Rectangle ToRectangle(this Rect rect)
+        => Rectangle.FromLTRB((int)rect.X1, (int)rect.Y1, (int)rect.X2, (int)rect.Y2);
+}
+
 

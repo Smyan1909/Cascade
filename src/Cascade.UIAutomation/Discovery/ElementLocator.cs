@@ -1,372 +1,255 @@
+using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using Cascade.UIAutomation.Elements;
-using Cascade.UIAutomation.Enums;
 
 namespace Cascade.UIAutomation.Discovery;
 
-/// <summary>
-/// Provides XPath-like element location using a simple locator syntax.
-/// </summary>
-/// <remarks>
-/// Supports syntax like:
-/// - /Window[@Name='Calculator']/Button[@AutomationId='num1Button']
-/// - //Button[contains(@Name, 'Submit')]
-/// - /Window/Pane/Edit[@ClassName='TextBox'][1]
-/// </remarks>
-public class ElementLocator
+public sealed class ElementLocator
 {
-    private readonly List<LocatorStep> _steps;
+    private static readonly Regex EqualsFilterRegex = new(@"^@(?<name>[A-Za-z]+)\s*=\s*'(?<value>[^']*)'$", RegexOptions.Compiled);
+    private static readonly Regex ContainsFilterRegex = new(@"^contains\(\s*@(?<name>[A-Za-z]+)\s*,\s*'(?<value>[^']*)'\s*\)$", RegexOptions.Compiled);
 
-    private ElementLocator(List<LocatorStep> steps)
+    private readonly IReadOnlyList<LocatorSegment> _segments;
+    private readonly bool _matchAnywhere;
+
+    private ElementLocator(IReadOnlyList<LocatorSegment> segments, bool matchAnywhere)
     {
-        _steps = steps;
+        _segments = segments;
+        _matchAnywhere = matchAnywhere;
     }
 
-    /// <summary>
-    /// Parses a locator string into an ElementLocator.
-    /// </summary>
-    /// <param name="locator">The locator string.</param>
-    /// <returns>An ElementLocator instance.</returns>
     public static ElementLocator Parse(string locator)
     {
         if (string.IsNullOrWhiteSpace(locator))
-            throw new ArgumentException("Locator string cannot be null or empty", nameof(locator));
-
-        var steps = new List<LocatorStep>();
-        var remaining = locator.Trim();
-
-        while (!string.IsNullOrEmpty(remaining))
         {
-            var step = ParseStep(ref remaining);
-            steps.Add(step);
+            throw new ArgumentException("Locator cannot be empty.", nameof(locator));
         }
 
-        return new ElementLocator(steps);
-    }
+        var trimmed = locator.Trim();
+        var matchAnywhere = trimmed.StartsWith("//", StringComparison.Ordinal);
+        var normalized = matchAnywhere ? trimmed[2..] : trimmed;
+        normalized = normalized.TrimStart('/');
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Select(ParseSegment)
+            .ToList();
 
-    /// <summary>
-    /// Finds the first element matching the locator.
-    /// </summary>
-    /// <param name="root">The root element to start the search from.</param>
-    /// <returns>The matching element, or null if not found.</returns>
-    public IUIElement? Find(IUIElement root)
-    {
-        var candidates = new List<IUIElement> { root };
-
-        foreach (var step in _steps)
+        if (segments.Count == 0)
         {
-            var newCandidates = new List<IUIElement>();
-
-            foreach (var candidate in candidates)
-            {
-                var matches = ApplyStep(candidate, step);
-                newCandidates.AddRange(matches);
-            }
-
-            if (newCandidates.Count == 0)
-                return null;
-
-            candidates = newCandidates;
+            throw new ArgumentException("Locator must contain at least one segment.", nameof(locator));
         }
 
-        return candidates.FirstOrDefault();
+        return new ElementLocator(segments, matchAnywhere);
     }
 
-    /// <summary>
-    /// Finds all elements matching the locator.
-    /// </summary>
-    /// <param name="root">The root element to start the search from.</param>
-    /// <returns>A list of matching elements.</returns>
+    public IUIElement? Find(IUIElement root) => FindAll(root).FirstOrDefault();
+
     public IReadOnlyList<IUIElement> FindAll(IUIElement root)
     {
-        var candidates = new List<IUIElement> { root };
+        if (root is null) throw new ArgumentNullException(nameof(root));
 
-        foreach (var step in _steps)
+        IEnumerable<IUIElement> candidates = _matchAnywhere ? Traverse(root) : new[] { root };
+
+        for (var i = 0; i < _segments.Count; i++)
         {
-            var newCandidates = new List<IUIElement>();
+            var segment = _segments[i];
+            var matches = candidates
+                .Where(segment.Matches)
+                .ApplyIndex(segment.Index)
+                .ToList();
 
-            foreach (var candidate in candidates)
+            if (matches.Count == 0)
             {
-                var matches = ApplyStep(candidate, step);
-                newCandidates.AddRange(matches);
-            }
-
-            if (newCandidates.Count == 0)
                 return Array.Empty<IUIElement>();
+            }
 
-            candidates = newCandidates;
+            if (i == _segments.Count - 1)
+            {
+                return matches;
+            }
+
+            candidates = matches.SelectMany(m => m.Children);
         }
 
-        return candidates;
+        return Array.Empty<IUIElement>();
     }
 
-    private static LocatorStep ParseStep(ref string remaining)
+    private static LocatorSegment ParseSegment(string segmentText)
     {
-        var step = new LocatorStep();
-
-        // Check for descendant search (//)
-        if (remaining.StartsWith("//"))
+        if (string.IsNullOrWhiteSpace(segmentText))
         {
-            step.SearchDescendants = true;
-            remaining = remaining.Substring(2);
-        }
-        else if (remaining.StartsWith("/"))
-        {
-            step.SearchDescendants = false;
-            remaining = remaining.Substring(1);
-        }
-        else if (remaining.Length > 0 && !remaining.StartsWith("/"))
-        {
-            // Continue with current position
-            step.SearchDescendants = false;
-        }
-        else
-        {
-            throw new FormatException($"Invalid locator syntax at: {remaining}");
+            throw new ArgumentException("Locator segment cannot be empty.", nameof(segmentText));
         }
 
-        // Parse control type (e.g., Button, Window, Edit)
-        var controlTypeMatch = Regex.Match(remaining, @"^([A-Za-z]+)");
-        if (controlTypeMatch.Success)
+        var trimmed = segmentText.Trim();
+        var controlTypePart = new string(trimmed.TakeWhile(c => c != '[').ToArray());
+        if (string.IsNullOrWhiteSpace(controlTypePart))
         {
-            var controlTypeName = controlTypeMatch.Groups[1].Value;
-            if (Enum.TryParse<ControlType>(controlTypeName, true, out var controlType))
+            throw new ArgumentException($"Locator segment '{segmentText}' is missing a control type.", nameof(segmentText));
+        }
+
+        var tokens = ExtractTokens(trimmed[controlTypePart.Length..]);
+        int? index = null;
+        var filters = new List<LocatorFilter>();
+
+        foreach (var token in tokens)
+        {
+            if (int.TryParse(token, out var idx))
             {
-                step.ControlType = controlType;
+                index = idx;
+                continue;
             }
-            else if (controlTypeName != "*")
+
+            var filter = ParseFilterToken(token);
+            if (filter is null)
             {
-                step.ControlType = null; // Unknown type, will match any
+                throw new ArgumentException($"Invalid locator filter '{token}'.", nameof(segmentText));
             }
-            remaining = remaining.Substring(controlTypeMatch.Length);
+
+            filters.Add(filter);
         }
 
-        // Parse predicates (e.g., [@Name='Calculator'][1])
-        while (remaining.StartsWith("["))
-        {
-            var predicateEnd = FindMatchingBracket(remaining);
-            if (predicateEnd < 0)
-                throw new FormatException("Unmatched bracket in locator");
-
-            var predicate = remaining.Substring(1, predicateEnd - 1);
-            ParsePredicate(step, predicate);
-            remaining = remaining.Substring(predicateEnd + 1);
-        }
-
-        return step;
+        return new LocatorSegment(controlTypePart, filters, index);
     }
 
-    private static void ParsePredicate(LocatorStep step, string predicate)
+    private static IEnumerable<string> ExtractTokens(string input)
     {
-        predicate = predicate.Trim();
-
-        // Check for numeric index (e.g., [1])
-        if (int.TryParse(predicate, out var index))
+        var tokens = new List<string>();
+        if (string.IsNullOrEmpty(input))
         {
-            step.Index = index;
-            return;
+            return tokens;
         }
 
-        // Check for contains function (e.g., contains(@Name, 'Submit'))
-        var containsMatch = Regex.Match(predicate, @"contains\s*\(\s*@(\w+)\s*,\s*'([^']*)'\s*\)");
-        if (containsMatch.Success)
+        var depth = 0;
+        var current = new StringBuilder();
+
+        foreach (var ch in input)
         {
-            var attrName = containsMatch.Groups[1].Value;
-            var value = containsMatch.Groups[2].Value;
-            step.Predicates.Add(new LocatorPredicate(attrName, value, PredicateOperator.Contains));
-            return;
-        }
-
-        // Check for starts-with function
-        var startsWithMatch = Regex.Match(predicate, @"starts-with\s*\(\s*@(\w+)\s*,\s*'([^']*)'\s*\)");
-        if (startsWithMatch.Success)
-        {
-            var attrName = startsWithMatch.Groups[1].Value;
-            var value = startsWithMatch.Groups[2].Value;
-            step.Predicates.Add(new LocatorPredicate(attrName, value, PredicateOperator.StartsWith));
-            return;
-        }
-
-        // Check for attribute equals (e.g., @Name='Calculator')
-        var attrMatch = Regex.Match(predicate, @"@(\w+)\s*=\s*'([^']*)'");
-        if (attrMatch.Success)
-        {
-            var attrName = attrMatch.Groups[1].Value;
-            var value = attrMatch.Groups[2].Value;
-            step.Predicates.Add(new LocatorPredicate(attrName, value, PredicateOperator.Equals));
-            return;
-        }
-
-        throw new FormatException($"Invalid predicate: {predicate}");
-    }
-
-    private static int FindMatchingBracket(string str)
-    {
-        if (!str.StartsWith("["))
-            return -1;
-
-        int depth = 0;
-        bool inString = false;
-
-        for (int i = 0; i < str.Length; i++)
-        {
-            char c = str[i];
-
-            if (c == '\'' && (i == 0 || str[i - 1] != '\\'))
+            if (ch == '[')
             {
-                inString = !inString;
-            }
-            else if (!inString)
-            {
-                if (c == '[')
-                    depth++;
-                else if (c == ']')
+                if (depth++ == 0)
                 {
-                    depth--;
-                    if (depth == 0)
-                        return i;
+                    continue;
                 }
             }
-        }
-
-        return -1;
-    }
-
-    private static IEnumerable<IUIElement> ApplyStep(IUIElement element, LocatorStep step)
-    {
-        IEnumerable<IUIElement> candidates;
-
-        if (step.SearchDescendants)
-        {
-            // Search all descendants
-            candidates = GetAllDescendants(element);
-        }
-        else
-        {
-            // Search only children
-            candidates = element.Children;
-        }
-
-        // Filter by control type
-        if (step.ControlType.HasValue)
-        {
-            candidates = candidates.Where(e => e.ControlType == step.ControlType.Value);
-        }
-
-        // Filter by predicates
-        foreach (var predicate in step.Predicates)
-        {
-            candidates = candidates.Where(e => MatchesPredicate(e, predicate));
-        }
-
-        // Apply index if specified
-        if (step.Index.HasValue)
-        {
-            var indexed = candidates.ElementAtOrDefault(step.Index.Value - 1); // 1-based index
-            if (indexed != null)
-                return new[] { indexed };
-            return Enumerable.Empty<IUIElement>();
-        }
-
-        return candidates;
-    }
-
-    private static IEnumerable<IUIElement> GetAllDescendants(IUIElement element)
-    {
-        foreach (var child in element.Children)
-        {
-            yield return child;
-            foreach (var descendant in GetAllDescendants(child))
+            else if (ch == ']')
             {
-                yield return descendant;
+                if (--depth == 0)
+                {
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                    continue;
+                }
+            }
+
+            if (depth > 0)
+            {
+                current.Append(ch);
+            }
+        }
+
+        return tokens;
+    }
+
+    private static LocatorFilter? ParseFilterToken(string token)
+    {
+        var equals = EqualsFilterRegex.Match(token);
+        if (equals.Success)
+        {
+            return new LocatorFilter(equals.Groups["name"].Value, equals.Groups["value"].Value, LocatorFilterOperator.Equals);
+        }
+
+        var contains = ContainsFilterRegex.Match(token);
+        if (contains.Success)
+        {
+            return new LocatorFilter(contains.Groups["name"].Value, contains.Groups["value"].Value, LocatorFilterOperator.Contains);
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<IUIElement> Traverse(IUIElement root)
+    {
+        var queue = new Queue<IUIElement>();
+        queue.Enqueue(root);
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            yield return current;
+            foreach (var child in current.Children)
+            {
+                queue.Enqueue(child);
             }
         }
     }
 
-    private static bool MatchesPredicate(IUIElement element, LocatorPredicate predicate)
+    private sealed record LocatorSegment(string ControlType, IReadOnlyList<LocatorFilter> Filters, int? Index)
     {
-        var value = GetAttributeValue(element, predicate.AttributeName);
-        if (value == null)
-            return false;
-
-        return predicate.Operator switch
+        public bool Matches(IUIElement element)
         {
-            PredicateOperator.Equals => string.Equals(value, predicate.Value, StringComparison.OrdinalIgnoreCase),
-            PredicateOperator.Contains => value.Contains(predicate.Value, StringComparison.OrdinalIgnoreCase),
-            PredicateOperator.StartsWith => value.StartsWith(predicate.Value, StringComparison.OrdinalIgnoreCase),
-            _ => false
-        };
-    }
+            if (element is null)
+            {
+                return false;
+            }
 
-    private static string? GetAttributeValue(IUIElement element, string attributeName)
-    {
-        return attributeName.ToLowerInvariant() switch
-        {
-            "name" => element.Name,
-            "automationid" => element.AutomationId,
-            "classname" => element.ClassName,
-            "controltype" => element.ControlType.ToString(),
-            "runtimeid" => element.RuntimeId,
-            "isenabled" => element.IsEnabled.ToString(),
-            "isoffscreen" => element.IsOffscreen.ToString(),
-            "hasKeyboardfocus" => element.HasKeyboardFocus.ToString(),
-            _ => null
-        };
-    }
+            if (!string.Equals(ControlType, "*", StringComparison.OrdinalIgnoreCase))
+            {
+                var elementType = element.ControlType?.ProgrammaticName?.Replace("ControlType.", string.Empty) ?? string.Empty;
+                if (!string.Equals(elementType, ControlType, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
 
-    /// <inheritdoc />
-    public override string ToString()
-    {
-        return string.Join("", _steps.Select(s => s.ToString()));
-    }
-
-    private class LocatorStep
-    {
-        public bool SearchDescendants { get; set; }
-        public ControlType? ControlType { get; set; }
-        public List<LocatorPredicate> Predicates { get; } = new();
-        public int? Index { get; set; }
-
-        public override string ToString()
-        {
-            var prefix = SearchDescendants ? "//" : "/";
-            var typeName = ControlType?.ToString() ?? "*";
-            var predicates = string.Join("", Predicates.Select(p => $"[{p}]"));
-            var index = Index.HasValue ? $"[{Index}]" : "";
-            return $"{prefix}{typeName}{predicates}{index}";
+            return Filters.All(filter => filter.Matches(element));
         }
     }
 
-    private class LocatorPredicate
+    private sealed record LocatorFilter(string Property, string Value, LocatorFilterOperator Operator)
     {
-        public string AttributeName { get; }
-        public string Value { get; }
-        public PredicateOperator Operator { get; }
-
-        public LocatorPredicate(string attributeName, string value, PredicateOperator op)
+        public bool Matches(IUIElement element)
         {
-            AttributeName = attributeName;
-            Value = value;
-            Operator = op;
-        }
+            var propertyValue = Property switch
+            {
+                "AutomationId" => element.AutomationId,
+                "Name" => element.Name,
+                "ClassName" => element.ClassName,
+                _ => null
+            };
 
-        public override string ToString()
-        {
+            if (propertyValue is null)
+            {
+                return false;
+            }
+
             return Operator switch
             {
-                PredicateOperator.Equals => $"@{AttributeName}='{Value}'",
-                PredicateOperator.Contains => $"contains(@{AttributeName}, '{Value}')",
-                PredicateOperator.StartsWith => $"starts-with(@{AttributeName}, '{Value}')",
-                _ => $"@{AttributeName}='{Value}'"
+                LocatorFilterOperator.Equals => string.Equals(propertyValue, Value, StringComparison.OrdinalIgnoreCase),
+                LocatorFilterOperator.Contains => propertyValue.Contains(Value, StringComparison.OrdinalIgnoreCase),
+                _ => false
             };
         }
     }
 
-    private enum PredicateOperator
+    private enum LocatorFilterOperator
     {
         Equals,
-        Contains,
-        StartsWith
+        Contains
     }
 }
+
+internal static class ElementLocatorEnumerableExtensions
+{
+    public static IEnumerable<IUIElement> ApplyIndex(this IEnumerable<IUIElement> source, int? index)
+    {
+        if (index is null)
+        {
+            return source;
+        }
+
+        var targetIndex = Math.Max(0, index.Value - 1);
+        return source.Skip(targetIndex).Take(1);
+    }
+}
+
 
