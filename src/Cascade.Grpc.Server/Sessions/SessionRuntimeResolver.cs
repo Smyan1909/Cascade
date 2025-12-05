@@ -21,28 +21,24 @@ internal sealed class SessionRuntimeResolver : ISessionRuntimeResolver
         _logger = logger;
     }
 
-    public async Task<SessionRuntime> ResolveAsync(GrpcSessionContext context, CancellationToken cancellationToken = default)
+    public async Task<SessionRuntime> ResolveAsync(GrpcSessionContext? context, CancellationToken cancellationToken = default)
     {
+        // Current-session mode: try to resolve from DB if provided; otherwise fall back to a local runtime.
         if (context is null || string.IsNullOrWhiteSpace(context.SessionId))
         {
-            throw new RpcException(new Status(StatusCode.InvalidArgument, "session_id is required."));
+            return BuildLocalRuntime();
         }
 
         var session = await _sessionRepository.GetBySessionIdAsync(context.SessionId).ConfigureAwait(false);
         if (session is null)
         {
-            throw new RpcException(new Status(StatusCode.NotFound, $"Session '{context.SessionId}' was not found."));
+            _logger.LogWarning("Session '{SessionId}' not found; falling back to local runtime.", context.SessionId);
+            return BuildLocalRuntime();
         }
 
         var handle = BuildHandle(session.SessionId, session.RunId, session.Profile);
-        var input = BuildInputChannel(session.SessionId);
-        var rootElement = AutomationElement.RootElement;
-
-        if (rootElement is null)
-        {
-            _logger.LogError("Automation root element is not available.");
-            throw new RpcException(new Status(StatusCode.Internal, "UI Automation root element is not available."));
-        }
+        var input = BuildLocalInputChannel();
+        var rootElement = AutomationElement.RootElement ?? throw new RpcException(new Status(StatusCode.Internal, "UI Automation root element is not available."));
 
         return new SessionRuntime(handle, input, rootElement);
     }
@@ -70,16 +66,24 @@ internal sealed class SessionRuntimeResolver : ISessionRuntimeResolver
         };
     }
 
-    private static VirtualInputChannel BuildInputChannel(string sessionId)
+    private static VirtualInputChannel BuildLocalInputChannel()
     {
         return new VirtualInputChannel
         {
             ChannelId = Guid.NewGuid(),
-            DevicePath = $@"\\.\cascade\input\{sessionId}",
-            Transport = "virtual",
+            DevicePath = "local-sendinput",
+            Transport = "sendinput",
             Profile = VirtualInputProfile.Balanced,
-            LatencyBudget = TimeSpan.FromMilliseconds(35)
+            LatencyBudget = TimeSpan.FromMilliseconds(20)
         };
+    }
+
+    private static SessionRuntime BuildLocalRuntime()
+    {
+        var handle = BuildHandle(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), VirtualDesktopProfile.Default);
+        var input = BuildLocalInputChannel();
+        var rootElement = AutomationElement.RootElement ?? throw new RpcException(new Status(StatusCode.Internal, "UI Automation root element is not available."));
+        return new SessionRuntime(handle, input, rootElement);
     }
 }
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This specification covers packaging, deployment, and scaling strategies for Cascade. In addition to the standard services, every installation must provision the **Session Host** service, which runs hidden Windows Virtual Desktop sessions plus virtual keyboard/mouse drivers so automation never steals focus from the user’s desktop.
+This specification covers packaging, deployment, and scaling strategies for Cascade. Current scope: automation runs in the current user session using standard UIA + SendInput. Hidden-session/driver-based deployment is deferred.
 
 ## Deployment Modes
 
@@ -10,8 +10,7 @@ This specification covers packaging, deployment, and scaling strategies for Casc
 - Single-user, single-machine deployment
 - SQLite database
 - All components run on one machine
-- Minimal infrastructure requirements
-- Session Host service runs on the same workstation with at least one GPU-capable virtual desktop
+- Automation uses current user session (no Session Host required)
 
 ### Distributed Mode
 - Multi-user support
@@ -19,7 +18,7 @@ This specification covers packaging, deployment, and scaling strategies for Casc
 - Horizontal scaling
 - Load balancing
 - Containerized deployment
-- Dedicated Session Host nodes (Windows Server) attached to the cluster provide hidden desktops for automation workloads
+- Automation still current-session per machine; hidden-session nodes are deferred
 
 ## Package Structure
 
@@ -29,7 +28,6 @@ This specification covers packaging, deployment, and scaling strategies for Casc
 CascadeSetup/
 ├── Cascade.CLI.exe              # Command-line interface
 ├── Cascade.Server.exe           # gRPC server
-├── Cascade.SessionHost.exe      # Hidden desktop / virtual input service
 ├── cascade_agent/               # Python agent package
 │   ├── __init__.py
 │   └── ...
@@ -50,10 +48,6 @@ CascadeSetup/
 │   ├── Cascade.CLI.exe
 │   ├── Cascade.Server.exe
 │   └── *.dll
-├── session-host/
-│   ├── Cascade.SessionHost.exe
-│   ├── drivers/               # Virtual keyboard/mouse + mirror driver
-│   └── profiles/              # Virtual desktop templates
 ├── python/
 │   ├── venv/                   # Python virtual environment
 │   └── cascade_agent/
@@ -67,12 +61,9 @@ CascadeSetup/
 └── tessdata/
 ```
 
-## Session Host Service
+## Session Host Service (Deferred)
 
-- Runs as `CascadeSessionHost` Windows service under a dedicated service account with `SeTcbPrivilege` to create virtual desktops.
-- Installs virtual HID drivers (keyboard + mouse) and a mirror display driver for off-screen capture.
-- Provides a local named-pipe API consumed by `Cascade.Grpc.Server` to pin automation sessions to hidden desktops.
-- Maintains a pool of pre-warmed virtual desktops so Explorer/Runtime agents can start immediately without impacting the user.
+Hidden-session hosting and virtual drivers are out of current scope. Present deployments run in the current user session. A future version may add a Session Host service with hidden desktops and virtual input/mirror drivers.
 
 ## Docker Configuration
 

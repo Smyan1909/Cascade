@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Agent Runtime module provides the infrastructure for loading, executing, and managing specialized agents created by the Builder Agent. All executions occur inside hidden Windows Virtual Desktop sessions so users can continue interacting with their desktops while agents run.
+The Agent Runtime module provides the infrastructure for loading, executing, and managing specialized agents created by the Builder Agent. Current scope: executions occur in the current user session using standard UIA + SendInput; hidden/isolated sessions are deferred.
 
 ## Architecture
 
@@ -32,11 +32,10 @@ python/cascade_agent/runtime/
     └── task_result.py
 ```
 
-## Session Orchestration
+## Session Handling
 
-- `RuntimeSessionManager` talks to the gRPC `SessionService` to acquire, heartbeat, and release hidden desktop sessions.
-- Each execution receives a unique `SessionHandle` that is injected into the `ExecutionContext`, loaded tools, and downstream CodeGen scripts.
-- Sessions can be pooled or per-request; the runtime refuses to run automation without an active session, ensuring the user’s desktop stays untouched.
+- Runtime operates in the current user session.
+- Session metadata is optional (audit/logging). No hidden-session acquisition in current scope.
 
 ## Agent Loading
 

@@ -26,7 +26,6 @@ service AgentService {
 }
 
 message CreateAgentRequest {
-    cascade.SessionContext session = 100;
     string name = 1;
     string description = 2;
     string target_application = 3;
@@ -37,13 +36,11 @@ message CreateAgentRequest {
 }
 
 message GetAgentRequest {
-    cascade.SessionContext session = 100;
     string id = 1;
     string name = 2;
 }
 
 message UpdateAgentRequest {
-    cascade.SessionContext session = 100;
     string id = 1;
     string name = 2;
     string description = 3;
@@ -54,12 +51,10 @@ message UpdateAgentRequest {
 }
 
 message DeleteAgentRequest {
-    cascade.SessionContext session = 100;
     string id = 1;
 }
 
 message ListAgentsRequest {
-    cascade.SessionContext session = 100;
     string target_application = 1;
     string name_contains = 2;
     int32 limit = 3;
@@ -67,31 +62,26 @@ message ListAgentsRequest {
 }
 
 message CreateVersionRequest {
-    cascade.SessionContext session = 100;
     string agent_id = 1;
     string version_notes = 2;
 }
 
 message GetVersionsRequest {
-    cascade.SessionContext session = 100;
     string agent_id = 1;
 }
 
 message SetActiveVersionRequest {
-    cascade.SessionContext session = 100;
     string agent_id = 1;
     string version = 2;
 }
 
 message GetExecutionHistoryRequest {
-    cascade.SessionContext session = 100;
     string agent_id = 1;
     int32 limit = 2;
     int32 offset = 3;
 }
 
 message RecordExecutionRequest {
-    cascade.SessionContext session = 100;
     string agent_id = 1;
     string task_description = 2;
     bool success = 3;

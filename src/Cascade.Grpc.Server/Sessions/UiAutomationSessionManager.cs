@@ -17,14 +17,10 @@ internal sealed class UiAutomationSessionManager : IUiAutomationSessionManager
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
     }
 
-    public Task<IUIAutomationService> GetServiceAsync(GrpcSessionContext session, CancellationToken cancellationToken = default)
+    public Task<IUIAutomationService> GetServiceAsync(GrpcSessionContext? session, CancellationToken cancellationToken = default)
     {
-        if (session is null || string.IsNullOrWhiteSpace(session.SessionId))
-        {
-            throw new RpcException(new Status(StatusCode.InvalidArgument, "session_id is required."));
-        }
-
-        var lazy = _services.GetOrAdd(session.SessionId, _ => new Lazy<Task<IUIAutomationService>>(
+        var key = string.IsNullOrWhiteSpace(session?.SessionId) ? "local" : session!.SessionId;
+        var lazy = _services.GetOrAdd(key, _ => new Lazy<Task<IUIAutomationService>>(
             () => CreateServiceAsync(session, cancellationToken),
             LazyThreadSafetyMode.ExecutionAndPublication));
 
@@ -41,7 +37,7 @@ internal sealed class UiAutomationSessionManager : IUiAutomationSessionManager
         _services.TryRemove(sessionId, out _);
     }
 
-    private async Task<IUIAutomationService> CreateServiceAsync(GrpcSessionContext context, CancellationToken cancellationToken)
+    private async Task<IUIAutomationService> CreateServiceAsync(GrpcSessionContext? context, CancellationToken cancellationToken)
     {
         using var scope = _scopeFactory.CreateScope();
         var runtimeResolver = scope.ServiceProvider.GetRequiredService<ISessionRuntimeResolver>();

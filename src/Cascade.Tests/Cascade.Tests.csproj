@@ -30,6 +30,7 @@
     <PackageReference Include="Grpc.Net.Client" Version="2.59.0" />
     <PackageReference Include="Grpc.Core.Testing" Version="2.46.6" />
     <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Playwright" Version="1.43.0" />
   </ItemGroup>
 
   <ItemGroup>

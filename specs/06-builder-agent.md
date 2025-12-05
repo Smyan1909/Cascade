@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Builder Agent takes the output from the Explorer Agent (application model and knowledge) and generates a complete, specialized agent for the target application. Code generation, validation, and smoke testing run inside hidden Windows Virtual Desktop sessions using virtual input devices so the user can continue working on the real desktop while new agents are produced.
+The Builder Agent takes the output from the Explorer Agent (application model and knowledge) and generates a complete, specialized agent for the target application. Current scope: code generation, validation, and smoke testing run in the current user session using standard UIA + SendInput. Hidden/isolated session support is deferred.
 
 ## Architecture
 
@@ -35,11 +35,10 @@ python/cascade_agent/builder/
     └── generated_code.py
 ```
 
-## Hidden Desktop Session Strategy
+## Session Strategy
 
-- Builder reuses the Explorer’s session when possible so validations run in the same environment.
-- Before dynamic validation/tests, the agent ensures the session is alive or requests a fresh one via SessionService.
-- After packaging, Builder releases the session so subsequent specialized agents or the end user can take over.
+- Builder runs validations in the current user session.
+- Session metadata is optional and used for audit/logging; no hidden session orchestration in the current scope.
 
 ## Agent State
 

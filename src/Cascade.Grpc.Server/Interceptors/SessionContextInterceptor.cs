@@ -9,11 +9,6 @@ namespace Cascade.Grpc.Server.Interceptors;
 
 public sealed class SessionContextInterceptor : Interceptor
 {
-    private static readonly HashSet<string> SessionOptionalServices = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "cascade.session.SessionService"
-    };
-
     private readonly IGrpcSessionContextAccessor _sessionAccessor;
     private readonly ILogger<SessionContextInterceptor> _logger;
 
@@ -30,7 +25,7 @@ public sealed class SessionContextInterceptor : Interceptor
         ServerCallContext context,
         UnaryServerMethod<TRequest, TResponse> continuation)
     {
-        return await WithSessionAsync(request, context.Method, () => continuation(request, context)).ConfigureAwait(false);
+        return await WithSessionAsync(request, () => continuation(request, context)).ConfigureAwait(false);
     }
 
     public override async Task<TResponse> ClientStreamingServerHandler<TRequest, TResponse>(
@@ -38,7 +33,6 @@ public sealed class SessionContextInterceptor : Interceptor
         ServerCallContext context,
         ClientStreamingServerMethod<TRequest, TResponse> continuation)
     {
-        EnsureSessionForStreaming(context.Method);
         return await continuation(requestStream, context).ConfigureAwait(false);
     }
 
@@ -48,7 +42,7 @@ public sealed class SessionContextInterceptor : Interceptor
         ServerCallContext context,
         ServerStreamingServerMethod<TRequest, TResponse> continuation)
     {
-        await WithSessionAsync(request, context.Method, async () =>
+        await WithSessionAsync(request, async () =>
         {
             await continuation(request, responseStream, context).ConfigureAwait(false);
             return true;
@@ -61,15 +55,12 @@ public sealed class SessionContextInterceptor : Interceptor
         ServerCallContext context,
         DuplexStreamingServerMethod<TRequest, TResponse> continuation)
     {
-        EnsureSessionForStreaming(context.Method);
         await continuation(requestStream, responseStream, context).ConfigureAwait(false);
     }
 
-    private async Task<T> WithSessionAsync<TRequest, T>(TRequest request, string method, Func<Task<T>> action)
+    private async Task<T> WithSessionAsync<TRequest, T>(TRequest request, Func<Task<T>> action)
     {
         var session = ExtractSession(request);
-        Validate(method, session);
-
         if (session is not null)
         {
             _sessionAccessor.Current = session;
@@ -85,19 +76,6 @@ public sealed class SessionContextInterceptor : Interceptor
             {
                 _sessionAccessor.Current = null;
             }
-        }
-    }
-
-    private void EnsureSessionForStreaming(string method)
-    {
-        if (IsSessionOptional(method))
-        {
-            return;
-        }
-
-        if (_sessionAccessor.Current is null)
-        {
-            throw new RpcException(new Status(StatusCode.InvalidArgument, "SessionContext is required for this call."));
         }
     }
 
@@ -133,15 +111,10 @@ public sealed class SessionContextInterceptor : Interceptor
 
     private void Validate(string method, GrpcSessionContext? session)
     {
-        if (IsSessionOptional(method))
-        {
-            return;
-        }
-
+        // Validation disabled in current-session mode.
         if (session is null)
         {
-            _logger.LogWarning("SessionContext missing for method {Method}", method);
-            throw new RpcException(new Status(StatusCode.InvalidArgument, "SessionContext is required for this call."));
+            _logger.LogDebug("SessionContext missing for method {Method}; proceeding with current-session defaults.", method);
         }
     }
 
@@ -163,16 +136,5 @@ public sealed class SessionContextInterceptor : Interceptor
         return value?.ToString();
     }
 
-    private static bool IsSessionOptional(string method)
-    {
-        // Method name format: /{package}.{Service}/{Method}
-        if (string.IsNullOrWhiteSpace(method))
-        {
-            return false;
-        }
-
-        var serviceName = method.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-        return serviceName is not null && SessionOptionalServices.Contains(serviceName);
-    }
 }
 

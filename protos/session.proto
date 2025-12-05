@@ -3,6 +3,7 @@ syntax = "proto3";
 package cascade.session;
 
 import "cascade.proto";
+import "google/protobuf/empty.proto";
 
 option csharp_namespace = "Cascade.Grpc.Session";
 

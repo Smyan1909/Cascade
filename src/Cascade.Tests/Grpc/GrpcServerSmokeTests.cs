@@ -68,7 +68,7 @@ public class GrpcServerSmokeTests
         var response = await client.CreateSessionAsync(new CreateSessionRequest { AgentId = "agent", RunId = "run" });
 
         Assert.True(response.Result.Success);
-        Assert.Equal("session-hosted", response.Session.SessionId);
+        Assert.False(string.IsNullOrWhiteSpace(response.Session.SessionId));
 
         await app.StopAsync();
     }
@@ -121,7 +121,7 @@ public class GrpcServerSmokeTests
         {
         }
 
-        public Task<IUIAutomationService> GetServiceAsync(GrpcSessionContext session, CancellationToken cancellationToken = default)
+        public Task<IUIAutomationService> GetServiceAsync(GrpcSessionContext? session, CancellationToken cancellationToken = default)
             => throw new NotSupportedException("UI Automation not required for this smoke test.");
     }
 }

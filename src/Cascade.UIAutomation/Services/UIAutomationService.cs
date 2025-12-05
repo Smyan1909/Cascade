@@ -21,8 +21,9 @@ public sealed class UIAutomationService : IUIAutomationService
         ILoggerFactory? loggerFactory = null)
     {
         _sessionContext = sessionContext ?? throw new ArgumentNullException(nameof(sessionContext));
-        var keyboard = new VirtualKeyboard(loggerFactory?.CreateLogger<VirtualKeyboard>());
-        var inputProvider = new VirtualMouse(sessionContext.Session, keyboard, loggerFactory?.CreateLogger<VirtualMouse>());
+        var nativeInput = new NativeInput();
+        var keyboard = new VirtualKeyboard(nativeInput, loggerFactory?.CreateLogger<VirtualKeyboard>());
+        var inputProvider = new VirtualMouse(sessionContext.Session, keyboard, nativeInput, loggerFactory?.CreateLogger<VirtualMouse>());
         var elementFactory = new ElementFactory(sessionContext, inputProvider, loggerFactory?.CreateLogger<ElementFactory>());
         elementFactory.Cache.DefaultCacheDuration = options.CacheDuration;
         elementFactory.Cache.EnableCaching = options.EnableCaching;

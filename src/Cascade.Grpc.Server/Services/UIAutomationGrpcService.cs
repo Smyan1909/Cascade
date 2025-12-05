@@ -524,7 +524,7 @@ public sealed class UIAutomationGrpcService : UIAutomationProtoService.UIAutomat
 
     private async Task<(GrpcSessionContext session, IUIAutomationService automation)> GetAutomationAsync(ServerCallContext context)
     {
-        var session = _sessionAccessor.Current ?? throw new RpcException(new Status(StatusCode.InvalidArgument, "SessionContext is required."));
+        var session = _sessionAccessor.Current ?? new GrpcSessionContext("local", "local-agent", "local-run");
         var automation = await _sessionManager.GetServiceAsync(session, context.CancellationToken).ConfigureAwait(false);
         return (session, automation);
     }

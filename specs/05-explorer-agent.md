@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Explorer Agent is a LangGraph-based agent responsible for understanding Windows applications through systematic UI exploration. It operates solely inside a hidden Windows Virtual Desktop session so users can continue using their foreground desktop while exploration runs.
+The Explorer Agent is a LangGraph-based agent responsible for understanding Windows applications through systematic UI exploration. Current scope: it runs in the current user session using standard UI Automation + SendInput (no hidden virtual desktops). A future hidden-session mode is deferred.
 
 ## Architecture
 
@@ -35,12 +35,11 @@ python/cascade_agent/explorer/
     └── action_result.py
 ```
 
-## Hidden Desktop Session Management
+## Session Handling
 
-- Explorer requests a hidden desktop session before parsing instructions.
-- Session usage is reference-counted so multiple explorer runs cannot collide.
-- All tool calls (`ui_client`, `vision_client`) automatically include the session token provided by `prepare_session_node`.
-- Upon completion or fatal error, the agent releases the session so the user can immediately take control of the application on their own desktop.
+- Explorer operates in the current user session.
+- Tools (`ui_client`, `vision_client`) call UIA/Vision directly; session metadata is optional and used only for audit/logging.
+- A future hidden-session mode may add a `prepare_session` node and session tokens; currently deferred.
 
 ## Agent State
 

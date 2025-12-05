@@ -29,26 +29,22 @@ service VisionService {
 }
 
 message CaptureScreenRequest {
-    cascade.SessionContext session = 100;
     int32 screen_index = 1;
     CaptureOptions options = 2;
 }
 
 message CaptureWindowRequest {
-    cascade.SessionContext session = 100;
     string window_handle = 1;
     string window_title = 2;
     CaptureOptions options = 3;
 }
 
 message CaptureElementRequest {
-    cascade.SessionContext session = 100;
     string runtime_id = 1;
     CaptureOptions options = 2;
 }
 
 message CaptureRegionRequest {
-    cascade.SessionContext session = 100;
     cascade.Rectangle region = 1;
     CaptureOptions options = 2;
 }
@@ -70,7 +66,6 @@ message CaptureResponse {
 }
 
 message RecognizeRequest {
-    cascade.SessionContext session = 100;
     bytes image_data = 1;
     OcrOptions options = 2;
 }
@@ -103,7 +98,6 @@ message OcrWord {
 }
 
 message FindTextRequest {
-    cascade.SessionContext session = 100;
     bytes image_data = 1;
     string search_text = 2;
     bool case_sensitive = 3;
@@ -122,20 +116,17 @@ message TextMatch {
 }
 
 message SetBaselineRequest {
-    cascade.SessionContext session = 100;
     bytes image_data = 1;
     string baseline_id = 2;
 }
 
 message CompareRequest {
-    cascade.SessionContext session = 100;
     bytes image_data = 1;
     string baseline_id = 2;
     CompareOptions options = 3;
 }
 
 message CompareImagesRequest {
-    cascade.SessionContext session = 100;
     bytes baseline_image = 1;
     bytes current_image = 2;
     CompareOptions options = 3;
@@ -149,7 +140,6 @@ message CompareOptions {
 }
 
 message WaitForChangeRequest {
-    cascade.SessionContext session = 100;
     cascade.Rectangle region = 1;
     int32 timeout_ms = 2;
     int32 polling_interval_ms = 3;
@@ -165,7 +155,6 @@ message ChangeResponse {
 }
 
 message AnalyzeLayoutRequest {
-    cascade.SessionContext session = 100;
     bytes image_data = 1;
 }
 
@@ -183,7 +172,6 @@ message LayoutRegion {
 }
 
 message DetectElementsRequest {
-    cascade.SessionContext session = 100;
     bytes image_data = 1;
     repeated string element_types = 2;
 }

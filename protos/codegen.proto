@@ -28,7 +28,6 @@ service CodeGenService {
 }
 
 message GenerateActionRequest {
-    cascade.SessionContext session = 100;
     string name = 1;
     string action_type = 2;
     string element_locator = 3;
@@ -36,7 +35,6 @@ message GenerateActionRequest {
 }
 
 message GenerateWorkflowRequest {
-    cascade.SessionContext session = 100;
     string name = 1;
     string description = 2;
     repeated WorkflowStep steps = 3;
@@ -52,7 +50,6 @@ message WorkflowStep {
 }
 
 message GenerateAgentRequest {
-    cascade.SessionContext session = 100;
     string name = 1;
     string description = 2;
     repeated string capabilities = 3;
@@ -69,7 +66,6 @@ message GeneratedCodeResponse {
 }
 
 message CompileRequest {
-    cascade.SessionContext session = 100;
     string source_code = 1;
     CompileOptions options = 2;
 }
@@ -98,7 +94,6 @@ message CompileError {
 }
 
 message CheckSyntaxRequest {
-    cascade.SessionContext session = 100;
     string source_code = 1;
 }
 
@@ -109,7 +104,6 @@ message SyntaxCheckResponse {
 }
 
 message ExecuteRequest {
-    cascade.SessionContext session = 100;
     string script_id = 1;
     string type_name = 2;
     string method_name = 3;
@@ -118,7 +112,6 @@ message ExecuteRequest {
 }
 
 message ExecuteScriptRequest {
-    cascade.SessionContext session = 100;
     string script_code = 1;
     map<string, string> variables = 2;
     int32 timeout_ms = 3;
@@ -135,7 +128,6 @@ message ExecuteResponse {
 }
 
 message SaveScriptRequest {
-    cascade.SessionContext session = 100;
     string id = 1;
     string name = 2;
     string description = 3;
@@ -145,14 +137,12 @@ message SaveScriptRequest {
 }
 
 message GetScriptRequest {
-    cascade.SessionContext session = 100;
     string id = 1;
     string name = 2;
     string version = 3;
 }
 
 message ListScriptsRequest {
-    cascade.SessionContext session = 100;
     string type = 1;
     string name_contains = 2;
     int32 limit = 3;
@@ -160,7 +150,6 @@ message ListScriptsRequest {
 }
 
 message DeleteScriptRequest {
-    cascade.SessionContext session = 100;
     string id = 1;
 }
 

@@ -55,22 +55,18 @@ service UIAutomationService {
 }
 
 message Empty {
-    cascade.SessionContext session = 100;
 }
 
 message ElementRequest {
-    cascade.SessionContext session = 100;
     string runtime_id = 1;
 }
 
 message FindWindowRequest {
-    cascade.SessionContext session = 100;
     string title = 1;
     bool exact_match = 2;
 }
 
 message FindElementRequest {
-    cascade.SessionContext session = 100;
     string runtime_id = 1;  // Optional: search from this element
     SearchCriteria criteria = 2;
     int32 timeout_ms = 3;
@@ -87,7 +83,6 @@ message SearchCriteria {
 }
 
 message WaitForElementRequest {
-    cascade.SessionContext session = 100;
     string runtime_id = 1;
     SearchCriteria criteria = 2;
     int32 timeout_ms = 3;
@@ -95,20 +90,17 @@ message WaitForElementRequest {
 }
 
 message GetDescendantsRequest {
-    cascade.SessionContext session = 100;
     string runtime_id = 1;
     int32 max_depth = 2;
 }
 
 message CaptureTreeRequest {
-    cascade.SessionContext session = 100;
     string runtime_id = 1;
     int32 max_depth = 2;
     bool include_offscreen = 3;
 }
 
 message ClickRequest {
-    cascade.SessionContext session = 100;
     string runtime_id = 1;
     ClickType click_type = 2;
     cascade.Point offset = 3;
@@ -122,7 +114,6 @@ enum ClickType {
 }
 
 message TypeTextRequest {
-    cascade.SessionContext session = 100;
     string runtime_id = 1;
     string text = 2;
     bool clear_first = 3;
@@ -130,13 +121,11 @@ message TypeTextRequest {
 }
 
 message SetValueRequest {
-    cascade.SessionContext session = 100;
     string runtime_id = 1;
     string value = 2;
 }
 
 message ScrollRequest {
-    cascade.SessionContext session = 100;
     string runtime_id = 1;
     ScrollDirection direction = 2;
     int32 amount = 3;
@@ -150,27 +139,23 @@ enum ScrollDirection {
 }
 
 message MoveWindowRequest {
-    cascade.SessionContext session = 100;
     string runtime_id = 1;
     int32 x = 2;
     int32 y = 3;
 }
 
 message ResizeWindowRequest {
-    cascade.SessionContext session = 100;
     string runtime_id = 1;
     int32 width = 2;
     int32 height = 3;
 }
 
 message AttachProcessRequest {
-    cascade.SessionContext session = 100;
     int32 process_id = 1;
     string process_name = 2;
 }
 
 message LaunchRequest {
-    cascade.SessionContext session = 100;
     string executable_path = 1;
     string arguments = 2;
     string working_directory = 3;

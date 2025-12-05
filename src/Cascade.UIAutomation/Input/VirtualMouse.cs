@@ -10,12 +10,14 @@ namespace Cascade.UIAutomation.Input;
 public sealed class VirtualMouse : IVirtualInputProvider
 {
     private readonly VirtualKeyboard _keyboard;
+    private readonly INativeInput _nativeInput;
     private readonly ILogger<VirtualMouse>? _logger;
 
-    public VirtualMouse(SessionHandle session, VirtualKeyboard keyboard, ILogger<VirtualMouse>? logger = null)
+    public VirtualMouse(SessionHandle session, VirtualKeyboard keyboard, INativeInput? nativeInput = null, ILogger<VirtualMouse>? logger = null)
     {
         Session = session ?? throw new ArgumentNullException(nameof(session));
         _keyboard = keyboard ?? throw new ArgumentNullException(nameof(keyboard));
+        _nativeInput = nativeInput ?? new NativeInput();
         _logger = logger;
     }
 
@@ -25,19 +27,19 @@ public sealed class VirtualMouse : IVirtualInputProvider
     {
         options ??= new ClickOptions();
         _logger?.LogDebug("Click {Button} ({Clicks}x) on session {SessionId}", button, options.ClickCount, Session.SessionId);
-        return Task.Delay(options.DelayAfterMs, cancellationToken);
+        return _nativeInput.ClickAsync(button, options, cancellationToken);
     }
 
     public Task MoveMouseAsync(Point screenPoint, CancellationToken cancellationToken = default)
     {
         _logger?.LogTrace("Move cursor to {Point} in session {SessionId}", screenPoint, Session.SessionId);
-        return Task.CompletedTask;
+        return _nativeInput.MoveMouseAsync(screenPoint, cancellationToken);
     }
 
     public Task ScrollAsync(int delta, ScrollOptions? options = null, CancellationToken cancellationToken = default)
     {
         _logger?.LogTrace("Scroll delta {Delta} (horizontal={Horizontal})", delta, options?.Horizontal ?? false);
-        return Task.CompletedTask;
+        return _nativeInput.ScrollAsync(delta, options, cancellationToken);
     }
 
     public Task SendVirtualKeyAsync(VirtualKey key, KeySendOptions? options = null, CancellationToken cancellationToken = default)

@@ -21,48 +21,50 @@ public sealed class SessionGrpcService : SessionService.SessionServiceBase
         _elementRegistry = elementRegistry ?? throw new ArgumentNullException(nameof(elementRegistry));
     }
 
-    public override async Task<SessionResponse> CreateSession(CreateSessionRequest request, ServerCallContext context)
+    public override Task<SessionResponse> CreateSession(CreateSessionRequest request, ServerCallContext context)
     {
-        var session = await _lifecycleManager.CreateAsync(request, context.CancellationToken).ConfigureAwait(false);
-        return session.ToSessionResponse();
-    }
-
-    public override async Task<SessionResponse> AttachSession(AttachSessionRequest request, ServerCallContext context)
-    {
-        var session = await _lifecycleManager.AttachAsync(request, context.CancellationToken).ConfigureAwait(false);
-        return session.ToSessionResponse();
-    }
-
-    public override async Task<Result> ReleaseSession(ReleaseSessionRequest request, ServerCallContext context)
-    {
-        if (string.IsNullOrWhiteSpace(request.SessionId))
+        // Current-session mode: return a stub session context.
+        var sessionId = Guid.NewGuid().ToString();
+        var response = new SessionResponse
         {
-            throw new RpcException(new Status(StatusCode.InvalidArgument, "session_id is required."));
-        }
-
-        await _lifecycleManager.ReleaseAsync(request.SessionId, request.Reason ?? "Released via API", context.CancellationToken).ConfigureAwait(false);
-        _automationSessionManager.Invalidate(request.SessionId);
-        _elementRegistry.InvalidateSession(request.SessionId);
-        return ProtoResults.Success();
+            Result = ProtoResults.Success(),
+            Session = new SessionContext
+            {
+                SessionId = sessionId,
+                AgentId = string.IsNullOrWhiteSpace(request.AgentId) ? "local-agent" : request.AgentId,
+                RunId = string.IsNullOrWhiteSpace(request.RunId) ? Guid.NewGuid().ToString() : request.RunId
+            }
+        };
+        return Task.FromResult(response);
     }
 
-    public override async Task<SessionResponse> Heartbeat(SessionHeartbeatRequest request, ServerCallContext context)
+    public override Task<Result> ReleaseSession(ReleaseSessionRequest request, ServerCallContext context)
     {
-        var session = await _lifecycleManager.HeartbeatAsync(request, context.CancellationToken).ConfigureAwait(false);
-        return session.ToSessionResponse();
+        var sessionId = string.IsNullOrWhiteSpace(request.SessionId) ? "local" : request.SessionId;
+        _automationSessionManager.Invalidate(sessionId);
+        _elementRegistry.InvalidateSession(sessionId);
+        return Task.FromResult(ProtoResults.Success());
+    }
+
+    public override Task<SessionResponse> Heartbeat(SessionHeartbeatRequest request, ServerCallContext context)
+    {
+        var response = new SessionResponse
+        {
+            Result = ProtoResults.Success(),
+            Session = new SessionContext
+            {
+                SessionId = string.IsNullOrWhiteSpace(request.SessionId) ? "local" : request.SessionId,
+                AgentId = "local-agent",
+                RunId = Guid.NewGuid().ToString()
+            }
+        };
+        return Task.FromResult(response);
     }
 
     public override async Task StreamEvents(SessionEventRequest request, IServerStreamWriter<SessionEvent> responseStream, ServerCallContext context)
     {
-        if (string.IsNullOrWhiteSpace(request.AgentId))
-        {
-            throw new RpcException(new Status(StatusCode.InvalidArgument, "agent_id is required."));
-        }
-
-        await foreach (var evt in _lifecycleManager.SubscribeAsync(request.AgentId, context.CancellationToken).ConfigureAwait(false))
-        {
-            await responseStream.WriteAsync(evt.ToProtoEvent()).ConfigureAwait(false);
-        }
+        // No-op stream in current-session mode.
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 }
 

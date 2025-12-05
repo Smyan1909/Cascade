@@ -26,17 +26,9 @@ Phase 5: Deployment
 
 ---
 
-## Hidden Desktop Automation Requirements
+## Local Session Automation (current scope)
 
-From this point forward, every module must satisfy these global constraints:
-
-1. **Automation in Hidden Sessions** – All UI automation runs inside Windows Virtual Desktop sessions hosted by the Cascade Session Host service. The user keeps full control of their physical desktop.
-2. **Virtual Input Only** – UIAutomation and Vision modules interact through virtual keyboard/mouse devices scoped to the session; physical input is never hijacked.
-3. **Session Lifecycle** – Explorer, Builder, and Runtime agents must request, monitor, and release sessions via the new `SessionService` gRPC API. Failures must trigger reacquire/retry logic.
-4. **State Sync for Users** – After automation completes, the target application remains usable so the user can continue working or override the agent’s changes.
-5. **Auditability** – Every RPC and database record carries a `session_id/run_id` so automation can be traced without exposing the hidden desktop.
-
-Keep these requirements in mind while following the per-module guidance below.
+For now, automation runs in the current user session using standard UI Automation + SendInput. No hidden virtual desktops, no custom HID drivers. The agent may briefly take control of the desktop to perform actions. Hidden/isolated sessions are deferred.
 
 ---
 
@@ -68,120 +60,80 @@ Keep these requirements in mind while following the per-module guidance below.
 
 ### 2. UI Automation
 
-**Why second?** This is the core capability that makes everything else possible. Without UI interaction, there's no agent.
+**Why second?** Core capability for any agent action.
 
 **Implementation approach:**
-- Start with `ElementDiscovery` scoped to a `SessionHandle`
-- Implement `TreeWalker` for navigating the hidden desktop hierarchy
-- Add action methods (click, type, scroll) via the virtual HID provider
-- Implement pattern support (Invoke, Value, Toggle, etc.)
-- Add element caching for performance
-- Build `ElementLocator` for XPath-like queries
-- Integrate the Session Orchestrator early so UIA calls fail fast without a session
+- Use `ElementDiscovery` and `TreeWalker` in the current user session/desktop.
+- Actions (click, type, scroll) use standard SendInput.
+- Implement patterns (Invoke, Value, Toggle, etc.) and element caching.
+- Build `ElementLocator` for XPath-like queries.
 
 **Testing protocol:**
-- **Unit tests**: Mock the UIA COM interfaces, test your wrapper logic
-- **Integration tests inside hidden session**: Launch Calculator/Notepad within a virtual desktop and drive them via virtual input *(deferred until the Session Host orchestration layer lands in Phase 3; current Phase 1 only validates the database + contract surface).*
-  - Test finding Calculator window
-  - Test clicking number buttons
-  - Test reading display value
-  - Test tree walking depth
-- **Integration tests with Notepad**: For text input testing *(same deferment while we finish Session Host work).*
-  - Test typing text
-  - Test value patterns
-  - Test menu navigation
-- **Performance tests**: Measure tree walk times, cache hit rates
-- **Stress tests**: Rapid element lookups, concurrent access
-- **Session failover tests**: Kill the hidden desktop mid-run and ensure UIA recovers gracefully
+- **Unit tests**: Mock UIA COM interfaces; test wrapper logic.
+- **Integration tests (local session)**: Launch Calculator/Notepad in the current session; drive via UIA + SendInput.
+  - Find Calculator window; click numbers; read display value.
+  - Notepad: type text, value patterns, menu navigation.
+- **Performance/stress**: tree walk times, cache hits, rapid lookups.
 
-> **Note:** Hidden-desktop automation tests are blocked until `SessionService` is fully implemented. Track re-enablement in Milestone 3 when the Explorer agent first consumes the service.
-
-**Success criteria:** Can programmatically operate Calculator and Notepad reliably inside hidden sessions without affecting the user's desktop
+**Success criteria:** Can operate Calculator and Notepad reliably in the current user session.
 
 ---
 
 ### 3. Vision/OCR
 
-**Why third?** Independent of UI Automation but needed for hybrid element finding. Can be developed in parallel.
+**Why third?** Supports hybrid element finding.
 
 **Implementation approach:**
-- Start with `ScreenCapture` driven by virtual desktop duplication APIs
-- Implement Windows OCR engine first (built-in, no dependencies)
-- Add Tesseract as fallback
-- Build change detection for UI monitoring
-- Add image preprocessing pipeline for OCR accuracy
-- Ensure capture coordinates are session-relative and independent of the user’s monitors
+- `ScreenCapture` using standard desktop duplication APIs in the current session.
+- Use Windows OCR first; add Tesseract as fallback.
+- Build change detection and preprocessing for accuracy.
+- Coordinates are relative to the current desktop.
 
 **Testing protocol:**
-- **Unit tests**: Image processing functions, OCR result parsing
-- **Integration tests**: 
-  - Capture screenshots of known windows running inside a hidden desktop
-  - OCR on images with known text (create test images)
-  - Compare OCR accuracy between Windows OCR and Tesseract
-- **Change detection tests**:
-  - Capture baseline, make UI change, verify detection
-  - Test threshold sensitivity
-- **Visual regression tests**: Store expected screenshots, compare against actual
-- **Session isolation tests**: Verify that capturing the hidden desktop never mirrors content to the primary desktop
+- **Unit tests**: Image processing, OCR parsing.
+- **Integration (local session)**: Capture screenshots of known windows; OCR known text; compare OCR engines.
+- **Change detection**: Baseline vs. modified window; threshold checks.
+- **Visual regression**: Expected vs. actual screenshots.
 
-**Success criteria:** OCR accuracy >95% on standard UI text; change detection works reliably within hidden desktops
+**Success criteria:** OCR accuracy >95% on standard UI text; reliable change detection on the current desktop.
 
 ---
 
 ### 4. CodeGen/Scripting
 
-**Why fourth?** Depends on UI Automation abstractions for the generated code templates.
+**Why fourth?** Builds on UIA abstractions.
 
 **Implementation approach:**
-- Start with Scriban template engine setup
-- Create templates for simple actions (click, type) that accept an `AutomationCallContext`
-- Implement Roslyn compiler wrapper
-- Build sandboxed execution environment that requires a valid session token before running code
-- Add script versioning and persistence (uses Database)
-- Create action recording capability
+- Scriban templates for actions (click, type) targeting current-session UIA.
+- Roslyn compiler wrapper; sandboxed execution (no file/network).
+- Script versioning/persistence; action recording.
 
 **Testing protocol:**
-- **Unit tests**: Template rendering, code syntax validation
-- **Compilation tests**: 
-  - Compile valid code - should succeed
-  - Compile invalid code - should fail gracefully with good errors
-  - Test all template variations
-- **Execution tests**:
-  - Execute simple scripts in sandbox
-  - Verify sandbox restrictions (no file access, no network)
-  - Test timeout handling
-- **Session injection tests**: Ensure generated code fails fast when session context is missing
-- **Round-trip tests**: Record actions → generate code → compile → execute → verify same result
+- **Unit**: Template rendering, syntax validation.
+- **Compilation**: Valid/invalid code; all template variants.
+- **Execution**: Execute simple scripts against current session; enforce timeouts.
+- **Round-trip**: Record → generate → compile → execute → verify result.
 
-**Success criteria:** Can generate, compile, and execute session-scoped UI automation scripts safely
+**Success criteria:** Generate, compile, and execute scripts safely in the current session.
 
 ---
 
 ### 5. gRPC Protocol
 
-**Why fifth?** Exposes all C# services to Python. Depends on modules 1-4 being functional.
+**Why fifth?** Exposes services to Python/other clients.
 
 **Implementation approach:**
-- Generate C# server code from proto files (including the new `SessionService`)
-- Implement service wrappers for each module
-- Add streaming for tree walking and UI monitoring
-- Implement error handling interceptor
-- Add logging interceptor
-- Setup health checks
-- Route every automation RPC through session middleware that injects/validates `session_id`
+- Generate server code from protos; SessionService can be a thin stub (current-session context) with future expansion.
+- Service wrappers for UIA, Vision, CodeGen, Agent.
+- Streaming for tree walking/monitoring; logging/error interceptors; health checks.
+- Session middleware becomes optional/lenient for current-session; keep request metadata for audit if needed.
 
 **Testing protocol:**
-- **Unit tests**: Service method logic, request/response mapping
-- **Integration tests**:
-  - Start server, call each endpoint from test client
-  - Test streaming endpoints (GetDescendants, CaptureTree)
-  - Test error conditions return appropriate gRPC status codes
-- **Session tests**: Create/destroy sessions via SessionService, ensure automation RPCs fail without a valid handle
-- **Performance tests**: Measure latency for each call type
-- **Connection tests**: Connect/disconnect cycles, reconnection handling
-- **Load tests**: Concurrent requests, sustained throughput
+- **Unit**: Service logic, mappings.
+- **Integration**: Start server; call endpoints (including streaming); verify status codes.
+- **Performance/connection/load**: Latency, reconnects, concurrency.
 
-**Success criteria:** All C# functionality (including session management) accessible via gRPC with <50ms latency for simple calls
+**Success criteria:** All services callable with <50ms latency for simple calls; no hidden-session requirement.
 
 ---
 
@@ -216,112 +168,82 @@ Keep these requirements in mind while following the per-module guidance below.
 
 ### 7. Explorer Agent
 
-**Why seventh?** First full agent. Uses all C# services + LLM. This is where the magic happens.
+**Why seventh?** First full agent using C# services + LLM.
 
 **Implementation approach:**
-- Build the LangGraph state and graph structure first
-- Add a `prepare_session` node to acquire a hidden desktop before exploration
-- Implement instruction parsing node
-- Implement planning node
-- Build session-aware UI exploration tools (wrappers around gRPC client)
-- Implement exploration loop
-- Add action testing logic
-- Build knowledge synthesis that releases the session when complete
+- LangGraph state/graph; instruction parsing; planning.
+- UI exploration tools call current-session UIA/Vision.
+- Exploration loop; action testing; synthesize findings.
 
 **Testing protocol:**
-- **Unit tests**: Individual node logic with mocked services
-- **Graph tests**: Verify correct node transitions for various states
-- **Integration tests with simple apps**:
-  - Test on Calculator with instruction: "Understand how to add two numbers"
-  - Test on Notepad with instruction: "Understand how to create and save a file"
-- **Exploration quality tests**:
-  - Did it find all expected elements?
-  - Did it correctly identify actionable elements?
-  - Is the generated application model accurate?
-- **Convergence tests**: Does it eventually terminate? How many steps?
-- **Session resilience tests**: Drop the session mid-run and verify the agent reacquires and resumes
+- **Unit**: Node logic with mocks.
+- **Graph**: Transitions for various states.
+- **Integration (current session)**: Calculator (“add two numbers”), Notepad (“create and save a file”).
+- **Quality**: expected elements/actionability/model accuracy.
+- **Convergence**: termination/steps.
 
-**Success criteria:** Can explore Calculator inside a hidden desktop and produce accurate application models without disturbing the user’s workspace
+**Success criteria:** Explore Calculator/Notepad in current session and produce accurate models.
 
 ---
 
 ### 8. Builder Agent
 
-**Why eighth?** Depends on Explorer output. Generates the specialized agents.
+**Why eighth?** Builds agents from Explorer output.
 
 **Implementation approach:**
-- Build state and graph structure
-- Implement design phase nodes
-- Create C# code generation (uses CodeGen module)
-- Implement Python agent code generation
-- Build validation loop that reuses or acquires a hidden session before running smoke tests
-- Add packaging logic (database storage)
+- State/graph structure; design nodes.
+- C# and Python code generation (using CodeGen).
+- Validation loop runs in current session; package results.
 
 **Testing protocol:**
-- **Unit tests**: Code generation templates, validation logic
-- **Integration tests**:
-  - Feed it a known Explorer output for Calculator
-  - Verify generated C# code compiles
-  - Verify generated agent has expected capabilities
-- **Code quality tests**:
-  - Generated code follows conventions
-  - No obvious errors or anti-patterns
-- **End-to-end tests**: Explorer → Builder → verify generated agent is functional
-- **Session tests**: Ensure sessions are released even when validation fails
+- **Unit**: Templates, validation logic.
+- **Integration**: Known Explorer output for Calculator; generated C# compiles; generated agent capabilities verified.
+- **Quality**: conventions, no obvious errors.
+- **End-to-end**: Explorer → Builder → functional agent.
 
-**Success criteria:** Produces working agents from exploration results while running all validations inside hidden desktops
+**Success criteria:** Produces working agents validated in the current session.
 
 ---
 
 ### 9. Agent Runtime
 
-**Why ninth?** Executes agents produced by Builder. Final piece of the agent pipeline.
+**Why ninth?** Executes generated agents.
 
 **Implementation approach:**
-- Implement agent loader from database
-- Build execution context management with session metadata
-- Implement the plan-execute loop
-- Add conversation memory
-- Build error recovery strategies (including session reacquire/retry)
-- Add execution history + session logging
+- Agent loader from DB; execution context in current session.
+- Plan-execute loop; conversation memory; error recovery.
+- Execution history + logging.
 
 **Testing protocol:**
-- **Unit tests**: Loading logic, state management, error recovery
-- **Integration tests**:
-  - Load a pre-created agent
-  - Execute simple tasks
-  - Verify results match expectations
-- **Conversation tests**: Multi-turn interactions maintain context
-- **Recovery tests**: Inject failures, verify recovery works
-- **Full pipeline test**: Explorer → Builder → Runtime → Execute task
-- **Concurrent session tests**: Run multiple agents simultaneously and ensure users retain full control of desktop
+- **Unit**: Loading, state, recovery.
+- **Integration**: Execute simple tasks; verify results.
+- **Conversation**: Multi-turn context.
+- **Recovery**: Inject failures; verify recovery.
+- **Full pipeline**: Explorer → Builder → Runtime → Execute task.
+- **Concurrency**: Multiple agents; current session access managed.
 
-**Success criteria:** Can load and execute generated agents reliably inside hidden desktops while leaving the user workspace untouched
+**Success criteria:** Load and execute agents reliably in the current session.
 
 ---
 
 ### 10. Distribution
 
-**Why last?** Packaging and deployment. Everything must work first.
+**Why last?** Packaging and deployment.
 
 **Implementation approach:**
-- Create Windows installer (WiX or similar)
-- Ship the Session Host Windows service + virtual drivers alongside the gRPC server
-- Build Docker images (logic/services) while ensuring they can talk to Windows Session Host nodes
-- Create docker-compose for full stack
-- Add configuration management
-- Implement health checks and monitoring (including session host metrics)
-- Create installation scripts
+- Create Windows installer (WiX or similar) for the current-session stack.
+- Docker images for services where applicable.
+- Configuration management; health checks; monitoring.
+- Installation scripts; upgrade/uninstall validation.
 
 **Testing protocol:**
-- **Installation tests**: Fresh Windows VM, install, verify all components work
-- **Docker tests**: Build images, run compose, verify services communicate
-- **Upgrade tests**: Install v1, upgrade to v2, verify data preserved
-- **Configuration tests**: Various config combinations work correctly
-- **Uninstall tests**: Clean removal, no artifacts left behind
-- **Session host tests**: Verify hidden desktops spin up, virtual input works, user desktop unaffected
+- **Installation**: Fresh Windows VM, verify components work.
+- **Docker**: Build/run compose (where applicable).
+- **Upgrade**: v1 → v2 data preserved.
+- **Configuration**: Various combos.
+- **Uninstall**: Clean removal.
 
-**Success criteria:** Clean install on fresh Windows machine; Docker deployment works; Session Host runs reliably
+**Success criteria:** Clean install; services run locally in the current session model.
 
 ---
 
@@ -333,21 +255,16 @@ Keep these requirements in mind while following the per-module guidance below.
 - Run full pipeline tests weekly
 
 ### Test Environment
-- Keep a dedicated Windows VM/machine for UI Automation tests
-- Use Docker for database and service tests
-- Mock LLM calls in CI (real calls in manual testing)
-- Maintain at least one Windows Session Host machine (with GPU) for integration tests
+- Use a Windows machine/VM for UI Automation tests (current session).
+- Use Docker for database/service tests.
+- Mock LLM calls in CI (real calls in manual testing).
 
 ### Test Data Management
-- Create standardized test applications (or use Calculator/Notepad)
-- Maintain test instruction manuals
-- Version control expected outputs
+- Standardized test apps (Calculator/Notepad) and fixtures.
+- Version control expected outputs.
 
 ### Monitoring in Tests
-- Log all gRPC calls during tests
-- Capture screenshots on test failures
-- Record LLM token usage
-- Track session lifecycle events (create/heartbeat/release) to catch leaks
+- Log gRPC calls; capture screenshots on failures; record LLM token usage.
 
 ---
 

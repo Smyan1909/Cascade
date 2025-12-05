@@ -222,7 +222,7 @@ public sealed class VisionGrpcService : VisionProtoService.VisionServiceBase
 
     private async Task<(SessionHandle Handle, DomainCaptureOptions Options)> ResolveSessionAsync(Cascade.Grpc.Vision.CaptureOptions? options, ServerCallContext context)
     {
-        var session = _sessionAccessor.Current ?? throw new RpcException(new Status(StatusCode.InvalidArgument, "SessionContext is required."));
+        var session = _sessionAccessor.Current ?? new GrpcSessionContext("local", "local-agent", "local-run");
         var runtime = await _runtimeResolver.ResolveAsync(session, context.CancellationToken).ConfigureAwait(false);
         return (runtime.Handle, options.ToDomain());
     }

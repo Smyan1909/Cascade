@@ -20,32 +20,23 @@ public class SessionContextInterceptorTests
     }
 
     [Fact]
-    public async Task UnaryServerHandler_Throws_WhenSessionMissing()
+    public async Task UnaryServerHandler_Allows_Missing_Session()
     {
         var context = TestServerCallContextFactory.Create("/cascade.uiautomation.UIAutomationService/GetDesktopRoot");
 
-        var call = () => _interceptor.UnaryServerHandler(
+        var response = await _interceptor.UnaryServerHandler(
             new Empty(),
             context,
             (request, _) => Task.FromResult(new ElementResponse()));
 
-        var exception = await Assert.ThrowsAsync<RpcException>(call);
-        Assert.Equal(StatusCode.InvalidArgument, exception.StatusCode);
+        Assert.NotNull(response);
         Assert.Null(_accessor.Current);
     }
 
     [Fact]
-    public async Task UnaryServerHandler_PopulatesContext_WhenSessionPresent()
+    public async Task UnaryServerHandler_NoSessionField_LeavesContextNull()
     {
-        var request = new FindElementRequest
-        {
-            Session = new ProtoSessionContext
-            {
-                SessionId = "session-123",
-                AgentId = "agent",
-                RunId = "run"
-            }
-        };
+        var request = new FindElementRequest();
 
         GrpcSessionContext? captured = null;
         var context = TestServerCallContextFactory.Create("/cascade.uiautomation.UIAutomationService/FindElement");
@@ -60,8 +51,7 @@ public class SessionContextInterceptorTests
             });
 
         Assert.True(response.Result.Success);
-        Assert.NotNull(captured);
-        Assert.Equal("session-123", captured!.SessionId);
+        Assert.Null(captured);
         Assert.Null(_accessor.Current);
     }
 }
