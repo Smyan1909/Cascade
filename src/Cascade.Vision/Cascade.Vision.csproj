@@ -6,9 +6,15 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>Cascade.Vision</RootNamespace>
+    <EnableWindowsOcr Condition="'$(EnableWindowsOcr)' == ''">false</EnableWindowsOcr>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(EnableWindowsOcr)' == 'true'">
+    <DefineConstants>$(DefineConstants);WINDOWS_OCR</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.2.0" />
     <PackageReference Include="Microsoft.Windows.SDK.Contracts" Version="10.0.22621.755" />
     <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
     <PackageReference Include="Tesseract" Version="5.2.0" />
@@ -30,7 +36,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="..\..\protos\vision.proto" GrpcServices="Client" ProtoRoot="..\.." />
+    <Protobuf Include="..\..\protos\paddle_ocr.proto" GrpcServices="Client" ProtoRoot="..\.." />
   </ItemGroup>
 
 </Project>

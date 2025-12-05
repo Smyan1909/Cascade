@@ -1,7 +1,11 @@
 using System.Linq;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Advanced;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using Image = SixLabors.ImageSharp.Image;
+using Color = System.Drawing.Color;
+using Rectangle = System.Drawing.Rectangle;
 
 namespace Cascade.Vision.Analysis;
 
@@ -41,7 +45,8 @@ public sealed class ElementAnalyzer : IElementAnalyzer
             for (var x = 0; x < image.Width; x += cellWidth)
             {
                 var bounds = new Rectangle(x, y, Math.Min(cellWidth, image.Width - x), Math.Min(cellHeight, image.Height - y));
-                var slice = image.Clone(context => context.Crop(bounds));
+                var slice = image.Clone(context =>
+                    context.Crop(new SixLabors.ImageSharp.Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height)));
 
                 var dominantColor = GetAverageColor(slice);
                 var brightness = (0.299 * dominantColor.R + 0.587 * dominantColor.G + 0.114 * dominantColor.B) / 255d;

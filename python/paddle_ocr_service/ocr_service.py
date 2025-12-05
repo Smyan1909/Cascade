@@ -4,7 +4,8 @@ from typing import Iterable
 
 import grpc
 
-from protos import vision_pb2, vision_pb2_grpc
+from protos import paddle_ocr_pb2 as vision_pb2
+from protos import paddle_ocr_pb2_grpc as vision_pb2_grpc
 from .models import ModelRegistry
 
 

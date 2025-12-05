@@ -1,3 +1,5 @@
+using System.Drawing;
+
 namespace Cascade.Vision.Analysis;
 
 public class VisualElement

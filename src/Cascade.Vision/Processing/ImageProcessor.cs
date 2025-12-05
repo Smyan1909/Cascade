@@ -3,16 +3,22 @@ using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using SixLabors.ImageSharp.Advanced;
+using Image = SixLabors.ImageSharp.Image;
+using ImageRectangle = SixLabors.ImageSharp.Rectangle;
+using DrawingRectangle = System.Drawing.Rectangle;
+using DrawingColor = System.Drawing.Color;
+using ImageSize = SixLabors.ImageSharp.Size;
 
 namespace Cascade.Vision.Processing;
 
 public class ImageProcessor
 {
-    public byte[] Crop(byte[] imageData, Rectangle region)
-        => Transform(imageData, ctx => ctx.Crop(region));
+    public byte[] Crop(byte[] imageData, DrawingRectangle region)
+        => Transform(imageData, ctx => ctx.Crop(new ImageRectangle(region.X, region.Y, region.Width, region.Height)));
 
-    public byte[] Resize(byte[] imageData, int width, int height, ResizeMode mode = ResizeMode.Fit)
-        => Transform(imageData, ctx => ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = mode }));
+    public byte[] Resize(byte[] imageData, int width, int height, ResizeMode mode = ResizeMode.Max)
+        => Transform(imageData, ctx => ctx.Resize(new ResizeOptions { Size = new ImageSize(width, height), Mode = mode }));
 
     public byte[] Rotate(byte[] imageData, double degrees)
         => Transform(imageData, ctx => ctx.Rotate((float)degrees));
@@ -56,10 +62,10 @@ public class ImageProcessor
             ctx.AdaptiveThreshold();
         });
 
-    public Color GetDominantColor(byte[] imageData)
+    public DrawingColor GetDominantColor(byte[] imageData)
     {
         using var image = Image.Load<Rgba32>(imageData);
-        var histogram = new Dictionary<Color, int>();
+        var histogram = new Dictionary<DrawingColor, int>();
         image.ProcessPixelRows(accessor =>
         {
             for (var y = 0; y < accessor.Height; y++)
@@ -67,7 +73,7 @@ public class ImageProcessor
                 var row = accessor.GetRowSpan(y);
                 for (var x = 0; x < row.Length; x++)
                 {
-                    var color = Color.FromArgb(row[x].A, row[x].R, row[x].G, row[x].B);
+                    var color = DrawingColor.FromArgb(row[x].A, row[x].R, row[x].G, row[x].B);
                     histogram[color] = histogram.TryGetValue(color, out var count) ? count + 1 : 1;
                 }
             }
@@ -76,10 +82,10 @@ public class ImageProcessor
         return histogram.OrderByDescending(kvp => kvp.Value).First().Key;
     }
 
-    public Color GetAverageColor(byte[] imageData, Rectangle? region = null)
+    public DrawingColor GetAverageColor(byte[] imageData, DrawingRectangle? region = null)
     {
         using var image = Image.Load<Rgba32>(imageData);
-        var area = region ?? new Rectangle(0, 0, image.Width, image.Height);
+        var area = region ?? new DrawingRectangle(0, 0, image.Width, image.Height);
         double r = 0, g = 0, b = 0;
         var total = area.Width * area.Height;
         image.ProcessPixelRows(accessor =>
@@ -96,7 +102,7 @@ public class ImageProcessor
             }
         });
 
-        return Color.FromArgb(255, (int)(r / total), (int)(g / total), (int)(b / total));
+        return DrawingColor.FromArgb(255, (int)(r / total), (int)(g / total), (int)(b / total));
     }
 
     public double GetBrightness(byte[] imageData)

@@ -1,0 +1,189 @@
+﻿syntax = "proto3";
+
+package cascade.codegen;
+
+import "cascade.proto";
+
+option csharp_namespace = "Cascade.Grpc.CodeGen";
+
+service CodeGenService {
+    // Code generation
+    rpc GenerateAction(GenerateActionRequest) returns (GeneratedCodeResponse);
+    rpc GenerateWorkflow(GenerateWorkflowRequest) returns (GeneratedCodeResponse);
+    rpc GenerateAgent(GenerateAgentRequest) returns (GeneratedCodeResponse);
+
+    // Compilation
+    rpc Compile(CompileRequest) returns (CompileResponse);
+    rpc CheckSyntax(CheckSyntaxRequest) returns (SyntaxCheckResponse);
+
+    // Execution
+    rpc Execute(ExecuteRequest) returns (ExecuteResponse);
+    rpc ExecuteScript(ExecuteScriptRequest) returns (ExecuteResponse);
+
+    // Script management
+    rpc SaveScript(SaveScriptRequest) returns (ScriptResponse);
+    rpc GetScript(GetScriptRequest) returns (ScriptResponse);
+    rpc ListScripts(ListScriptsRequest) returns (ScriptListResponse);
+    rpc DeleteScript(DeleteScriptRequest) returns (cascade.Result);
+}
+
+message GenerateActionRequest {
+    cascade.SessionContext session = 100;
+    string name = 1;
+    string action_type = 2;
+    string element_locator = 3;
+    map<string, string> parameters = 4;
+}
+
+message GenerateWorkflowRequest {
+    cascade.SessionContext session = 100;
+    string name = 1;
+    string description = 2;
+    repeated WorkflowStep steps = 3;
+}
+
+message WorkflowStep {
+    int32 order = 1;
+    string name = 2;
+    string action_type = 3;
+    string element_locator = 4;
+    map<string, string> parameters = 5;
+    int32 delay_after_ms = 6;
+}
+
+message GenerateAgentRequest {
+    cascade.SessionContext session = 100;
+    string name = 1;
+    string description = 2;
+    repeated string capabilities = 3;
+    repeated GenerateActionRequest actions = 4;
+}
+
+message GeneratedCodeResponse {
+    cascade.Result result = 1;
+    string source_code = 2;
+    string file_name = 3;
+    string namespace = 4;
+    repeated string required_usings = 5;
+    repeated string required_references = 6;
+}
+
+message CompileRequest {
+    cascade.SessionContext session = 100;
+    string source_code = 1;
+    CompileOptions options = 2;
+}
+
+message CompileOptions {
+    string assembly_name = 1;
+    repeated string references = 2;
+    bool optimize = 3;
+}
+
+message CompileResponse {
+    cascade.Result result = 1;
+    bool compilation_success = 2;
+    bytes assembly_bytes = 3;
+    repeated CompileError errors = 4;
+    repeated CompileError warnings = 5;
+    int32 compilation_time_ms = 6;
+}
+
+message CompileError {
+    string code = 1;
+    string message = 2;
+    int32 line = 3;
+    int32 column = 4;
+    string severity = 5;
+}
+
+message CheckSyntaxRequest {
+    cascade.SessionContext session = 100;
+    string source_code = 1;
+}
+
+message SyntaxCheckResponse {
+    cascade.Result result = 1;
+    bool is_valid = 2;
+    repeated CompileError diagnostics = 3;
+}
+
+message ExecuteRequest {
+    cascade.SessionContext session = 100;
+    string script_id = 1;
+    string type_name = 2;
+    string method_name = 3;
+    map<string, string> variables = 4;
+    int32 timeout_ms = 5;
+}
+
+message ExecuteScriptRequest {
+    cascade.SessionContext session = 100;
+    string script_code = 1;
+    map<string, string> variables = 2;
+    int32 timeout_ms = 3;
+}
+
+message ExecuteResponse {
+    cascade.Result result = 1;
+    bool execution_success = 2;
+    string return_value = 3;
+    string exception_message = 4;
+    string exception_stack_trace = 5;
+    int32 execution_time_ms = 6;
+    repeated string logs = 7;
+}
+
+message SaveScriptRequest {
+    cascade.SessionContext session = 100;
+    string id = 1;
+    string name = 2;
+    string description = 3;
+    string source_code = 4;
+    string type = 5;
+    map<string, string> metadata = 6;
+}
+
+message GetScriptRequest {
+    cascade.SessionContext session = 100;
+    string id = 1;
+    string name = 2;
+    string version = 3;
+}
+
+message ListScriptsRequest {
+    cascade.SessionContext session = 100;
+    string type = 1;
+    string name_contains = 2;
+    int32 limit = 3;
+    int32 offset = 4;
+}
+
+message DeleteScriptRequest {
+    cascade.SessionContext session = 100;
+    string id = 1;
+}
+
+message ScriptResponse {
+    cascade.Result result = 1;
+    Script script = 2;
+}
+
+message ScriptListResponse {
+    cascade.Result result = 1;
+    repeated Script scripts = 2;
+    int32 total_count = 3;
+}
+
+message Script {
+    string id = 1;
+    string name = 2;
+    string description = 3;
+    string source_code = 4;
+    string type = 5;
+    string current_version = 6;
+    string created_at = 7;
+    string updated_at = 8;
+    map<string, string> metadata = 9;
+}
+

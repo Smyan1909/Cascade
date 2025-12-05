@@ -1,3 +1,5 @@
+#if WINDOWS_OCR
+using System.Drawing;
 using System.Linq;
 using Cascade.Vision.Capture;
 using Windows.Globalization;
@@ -145,6 +147,8 @@ public sealed class WindowsOcrEngine : IOcrEngine
     }
 }
 
+#region Helpers
+
 internal static class OcrWordExtensions
 {
     public static Rectangle ToRectangle(this IReadOnlyList<Point?> points)
@@ -159,5 +163,44 @@ internal static class OcrWordExtensions
         return Rectangle.FromLTRB((int)xs.Min(), (int)ys.Min(), (int)xs.Max(), (int)ys.Max());
     }
 }
+
+#endregion
+#else
+namespace Cascade.Vision.OCR;
+
+public sealed class WindowsOcrEngine : IOcrEngine
+{
+    public WindowsOcrEngine(OcrOptions? options = null)
+    {
+        Options = options ?? new OcrOptions();
+    }
+
+    public string EngineName => "Windows.Media.Ocr";
+    public IReadOnlyList<string> SupportedLanguages { get; } = Array.Empty<string>();
+    public bool IsAvailable => false;
+    public OcrOptions Options { get; set; }
+
+    public Task<OcrResult> RecognizeAsync(Capture.CaptureResult capture, CancellationToken cancellationToken = default)
+        => Task.FromResult(NotAvailable());
+
+    public Task<OcrResult> RecognizeAsync(byte[] imageData, CancellationToken cancellationToken = default)
+        => Task.FromResult(NotAvailable());
+
+    public Task<OcrResult> RecognizeAsync(string imagePath, CancellationToken cancellationToken = default)
+        => Task.FromResult(NotAvailable());
+
+    public Task<OcrResult> RecognizeRegionAsync(byte[] imageData, System.Drawing.Rectangle region, CancellationToken cancellationToken = default)
+        => Task.FromResult(NotAvailable());
+
+    private OcrResult NotAvailable() => new()
+    {
+        FullText = string.Empty,
+        Confidence = 0,
+        EngineUsed = $"{EngineName} (unavailable on this platform)",
+        Lines = Array.Empty<OcrLine>(),
+        Words = Array.Empty<OcrWord>()
+    };
+}
+#endif
 
 

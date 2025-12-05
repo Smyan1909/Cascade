@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+option csharp_namespace = "Cascade.Vision.Protos";
+
+package vision;
+
+message Empty {}
+
+service PaddleOcrService {
+  rpc Recognize (PaddleOcrRequest) returns (PaddleOcrResponse);
+  rpc RecognizeBatch (stream PaddleOcrRequest) returns (stream PaddleOcrResponse);
+  rpc GetStatus (Empty) returns (PaddleOcrStatus);
+}
+
+message PaddleOcrRequest {
+  bytes image_data = 1;
+  string language = 2;
+  PaddleOcrModel model = 3;
+  bool use_angle_classifier = 4;
+  bool detect_only = 5;
+}
+
+message PaddleOcrResponse {
+  bool success = 1;
+  string error_message = 2;
+  string full_text = 3;
+  double confidence = 4;
+  repeated PaddleOcrLine lines = 5;
+  int32 processing_time_ms = 6;
+  string model_used = 7;
+}
+
+message PaddleOcrLine {
+  string text = 1;
+  repeated PaddleOcrPoint polygon = 2;
+  double confidence = 3;
+  repeated PaddleOcrWord words = 4;
+}
+
+message PaddleOcrPoint {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+message PaddleOcrWord {
+  string text = 1;
+  repeated PaddleOcrPoint polygon = 2;
+  double confidence = 3;
+}
+
+message PaddleOcrStatus {
+  bool is_ready = 1;
+  string model_loaded = 2;
+  bool gpu_available = 3;
+  int32 gpu_memory_used_mb = 4;
+}
+
+enum PaddleOcrModel {
+  PADDLE_OCR_MODEL_UNSPECIFIED = 0;
+  PADDLE_OCR_MODEL_VITSTR = 1;
+  PADDLE_OCR_MODEL_SVTR = 2;
+  PADDLE_OCR_MODEL_PP_OCRV4 = 3;
+}
+

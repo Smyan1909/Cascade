@@ -1,0 +1,18 @@
+// Auto-generated Test Script
+// Generated: {{ date.now | date.to_string "%Y-%m-%d %H:%M:%S" }}
+
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace {{ namespace }}
+{
+    public class {{ class_name }}
+    {
+        public Task ExecuteAsync(CancellationToken cancellationToken = default)
+        {
+            // TODO: Generated verification logic
+            return Task.CompletedTask;
+        }
+    }
+}
+

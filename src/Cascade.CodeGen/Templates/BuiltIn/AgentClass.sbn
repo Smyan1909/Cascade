@@ -1,0 +1,30 @@
+// Auto-generated Agent Class
+// Generated: {{ date.now | date.to_string "%Y-%m-%d %H:%M:%S" }}
+
+using System.Threading;
+using System.Threading.Tasks;
+using Cascade.CodeGen.Execution;
+
+namespace {{ namespace }}
+{
+    public class {{ class_name }}
+    {
+        private readonly IGeneratedActionExecutor _actionExecutor;
+        private readonly AutomationCallContext _context;
+
+        public {{ class_name }}(
+            IGeneratedActionExecutor actionExecutor,
+            AutomationCallContext context)
+        {
+            _actionExecutor = actionExecutor ?? throw new ArgumentNullException(nameof(actionExecutor));
+            _context = context ?? throw new ArgumentNullException(nameof(context));
+        }
+
+        public Task ExecuteAsync(CancellationToken cancellationToken = default)
+        {
+            // TODO: Agent logic generated during Builder phase
+            return Task.CompletedTask;
+        }
+    }
+}
+

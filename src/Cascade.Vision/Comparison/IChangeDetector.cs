@@ -1,3 +1,4 @@
+using System.Drawing;
 using Cascade.Vision.Capture;
 
 namespace Cascade.Vision.Comparison;

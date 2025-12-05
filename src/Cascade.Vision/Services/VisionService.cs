@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Linq;
+using System.Drawing;
 using Cascade.Vision.Analysis;
 using Cascade.Vision.Capture;
 using Cascade.Vision.Comparison;
@@ -38,12 +39,27 @@ public sealed class VisionService
         _loggerFactory = loggerFactory;
     }
 
-    public async Task<CaptureResult> CaptureScreenAsync(SessionHandle session, int screenIndex = 0, CancellationToken cancellationToken = default)
+    public async Task<CaptureResult> CaptureScreenAsync(SessionHandle session, int screenIndex = 0, CaptureOptions? options = null, CancellationToken cancellationToken = default)
     {
-        var capture = await CreateCapture(session).CaptureScreenAsync(screenIndex, cancellationToken);
+        var capture = await CreateCapture(session, options).CaptureScreenAsync(screenIndex, cancellationToken);
         Cache(session, capture);
         return capture;
     }
+
+    public Task<CaptureResult> CaptureForegroundWindowAsync(SessionHandle session, CaptureOptions? options = null, CancellationToken cancellationToken = default)
+        => CreateCapture(session, options).CaptureForegroundWindowAsync(cancellationToken);
+
+    public Task<CaptureResult> CaptureWindowAsync(SessionHandle session, string windowTitle, CaptureOptions? options = null, CancellationToken cancellationToken = default)
+        => CreateCapture(session, options).CaptureWindowAsync(windowTitle, cancellationToken);
+
+    public Task<CaptureResult> CaptureWindowAsync(SessionHandle session, IntPtr windowHandle, CaptureOptions? options = null, CancellationToken cancellationToken = default)
+        => CreateCapture(session, options).CaptureWindowAsync(windowHandle, cancellationToken);
+
+    public Task<CaptureResult> CaptureRegionAsync(SessionHandle session, Rectangle region, CaptureOptions? options = null, CancellationToken cancellationToken = default)
+        => CreateCapture(session, options).CaptureRegionAsync(region, cancellationToken);
+
+    public Task<CaptureResult> CaptureElementAsync(SessionHandle session, Rectangle region, CaptureOptions? options = null, CancellationToken cancellationToken = default)
+        => CreateCapture(session, options).CaptureRegionAsync(region, cancellationToken);
 
     public async Task<OcrResult> RecognizeAsync(SessionHandle session, CaptureResult? capture = null, CancellationToken cancellationToken = default)
     {
@@ -75,10 +91,11 @@ public sealed class VisionService
         return await _changeDetector.WaitForStabilityAsync(capture, region, stabilityDuration, cancellationToken);
     }
 
-    private ScreenCapture CreateCapture(SessionHandle session)
+    private ScreenCapture CreateCapture(SessionHandle session, CaptureOptions? overrideOptions = null)
     {
         var captureLogger = _loggerFactory?.CreateLogger<ScreenCapture>();
-        var capture = new ScreenCapture(session, _frameProvider, _options.DefaultCaptureOptions, captureLogger);
+        var options = overrideOptions ?? _options.DefaultCaptureOptions;
+        var capture = new ScreenCapture(session, _frameProvider, options, captureLogger);
         return capture;
     }
 

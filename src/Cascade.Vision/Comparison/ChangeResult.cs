@@ -1,3 +1,5 @@
+using System.Drawing;
+
 namespace Cascade.Vision.Comparison;
 
 public class ChangeResult

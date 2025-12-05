@@ -1,5 +1,8 @@
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Advanced;
 using SixLabors.ImageSharp.PixelFormats;
+using Image = SixLabors.ImageSharp.Image;
+using Color = System.Drawing.Color;
 
 namespace Cascade.Vision.Analysis;
 

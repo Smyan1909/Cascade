@@ -1,3 +1,4 @@
+using System.Drawing;
 using System.Linq;
 using Cascade.Vision.Capture;
 using Cascade.Vision.Protos;
@@ -153,9 +154,9 @@ public sealed class PaddleOcrEngine : IOcrEngine, IDisposable
 
     private ProtoModel MapModel(PaddleOcrModel model) => model switch
     {
-        PaddleOcrModel.SVTR => ProtoModel.PaddleOcrModelSvtr,
-        PaddleOcrModel.ViTSTR => ProtoModel.PaddleOcrModelVitstr,
-        _ => ProtoModel.PaddleOcrModelPpOcrv4
+        PaddleOcrModel.SVTR => ProtoModel.Svtr,
+        PaddleOcrModel.ViTSTR => ProtoModel.Vitstr,
+        _ => ProtoModel.PpOcrv4
     };
 
     private bool CheckHealth()

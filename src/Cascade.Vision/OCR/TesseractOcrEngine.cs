@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Linq;
 using Cascade.Vision.Capture;
 using Tesseract;
+using System.Drawing;
 
 namespace Cascade.Vision.OCR;
 
@@ -83,7 +84,7 @@ public sealed class TesseractOcrEngine : IOcrEngine, IDisposable
                         }
 
                         var wordText = iterator.GetText(PageIteratorLevel.Word) ?? string.Empty;
-                        var confidence = iterator.Confidence(PageIteratorLevel.Word) / 100.0;
+                        var confidence = iterator.GetConfidence(PageIteratorLevel.Word) / 100.0;
                         var word = new OcrWord
                         {
                             Text = wordText.Trim(),

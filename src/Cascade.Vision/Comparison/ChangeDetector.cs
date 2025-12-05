@@ -1,8 +1,11 @@
 using System.Linq;
 using Cascade.Vision.Capture;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Advanced;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using Image = SixLabors.ImageSharp.Image;
+using Rectangle = System.Drawing.Rectangle;
 
 namespace Cascade.Vision.Comparison;
 
@@ -22,21 +25,21 @@ public sealed class ChangeDetector : IChangeDetector
         return Task.CompletedTask;
     }
 
-    public async Task<ChangeResult> CompareWithBaselineAsync(byte[] current, CancellationToken cancellationToken = default)
+    public Task<ChangeResult> CompareWithBaselineAsync(byte[] current, CancellationToken cancellationToken = default)
     {
         if (_baseline is null)
         {
             throw new InvalidOperationException("Baseline has not been set.");
         }
 
-        return await CompareAsync(_baseline, current, cancellationToken);
+        return CompareAsync(_baseline, current, cancellationToken);
     }
 
-    public async Task<ChangeResult> CompareAsync(byte[] baseline, byte[] current, CancellationToken cancellationToken = default)
+    public Task<ChangeResult> CompareAsync(byte[] baseline, byte[] current, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var baselineImage = await LoadAsync(baseline, cancellationToken);
-        using var currentImage = await LoadAsync(current, cancellationToken);
+        using var baselineImage = LoadImage(baseline);
+        using var currentImage = LoadImage(current);
 
         if (baselineImage.Width != currentImage.Width || baselineImage.Height != currentImage.Height)
         {
@@ -53,9 +56,9 @@ public sealed class ChangeDetector : IChangeDetector
 
         for (var y = 0; y < baselineImage.Height; y++)
         {
-            var baseRow = baselineImage.GetPixelRowSpan(y);
-            var currentRow = currentImage.GetPixelRowSpan(y);
-            var diffRow = diffImage is null ? Span<Rgba32>.Empty : diffImage.GetPixelRowSpan(y);
+            var baseRow = baselineImage.DangerousGetPixelRowMemory(y).Span;
+            var currentRow = currentImage.DangerousGetPixelRowMemory(y).Span;
+            var diffRow = diffImage is null ? Span<Rgba32>.Empty : diffImage.DangerousGetPixelRowMemory(y).Span;
 
             for (var x = 0; x < baseRow.Length; x++)
             {
@@ -93,7 +96,7 @@ public sealed class ChangeDetector : IChangeDetector
 
         diffImage?.Dispose();
 
-        return result;
+        return Task.FromResult(result);
     }
 
     public Task<ChangeResult> CompareAsync(CaptureResult baseline, CaptureResult current, CancellationToken cancellationToken = default)
@@ -200,11 +203,8 @@ public sealed class ChangeDetector : IChangeDetector
         return merged;
     }
 
-    private static async Task<Image<Rgba32>> LoadAsync(byte[] data, CancellationToken cancellationToken)
-    {
-        await using var stream = new MemoryStream(data);
-        return await Image.LoadAsync<Rgba32>(stream, cancellationToken);
-    }
+    private static Image<Rgba32> LoadImage(byte[] data)
+        => Image.Load<Rgba32>(data);
 }
 
 

@@ -32,7 +32,8 @@ public class CompositeOcrEngineTests
         {
             Confidence = 0.95,
             FullText = "Gamma Target",
-            Words = new[] { new OcrWord { Text = "Target", BoundingBox = new System.Drawing.Rectangle(1, 1, 5, 5), Confidence = 0.95 } }
+            Words = new[] { new OcrWord { Text = "Target", BoundingBox = new System.Drawing.Rectangle(1, 1, 5, 5), Confidence = 0.95 } },
+            EngineUsed = "PaddleOCR"
         }, isAvailable: true);
 
         var engine = new CompositeOcrEngine(windows, tesseract, paddle);

@@ -1,65 +1,201 @@
 syntax = "proto3";
 
-option csharp_namespace = "Cascade.Vision.Protos";
+package cascade.vision;
 
-package vision;
+import "cascade.proto";
 
-message Empty {}
+option csharp_namespace = "Cascade.Grpc.Vision";
 
-service PaddleOcrService {
-  rpc Recognize (PaddleOcrRequest) returns (PaddleOcrResponse);
-  rpc RecognizeBatch (stream PaddleOcrRequest) returns (stream PaddleOcrResponse);
-  rpc GetStatus (Empty) returns (PaddleOcrStatus);
+service VisionService {
+    // Screenshot capture
+    rpc CaptureScreen(CaptureScreenRequest) returns (CaptureResponse);
+    rpc CaptureWindow(CaptureWindowRequest) returns (CaptureResponse);
+    rpc CaptureElement(CaptureElementRequest) returns (CaptureResponse);
+    rpc CaptureRegion(CaptureRegionRequest) returns (CaptureResponse);
+
+    // OCR
+    rpc RecognizeText(RecognizeRequest) returns (OcrResponse);
+    rpc FindText(FindTextRequest) returns (FindTextResponse);
+
+    // Change detection
+    rpc SetBaseline(SetBaselineRequest) returns (cascade.Result);
+    rpc CompareWithBaseline(CompareRequest) returns (ChangeResponse);
+    rpc CompareImages(CompareImagesRequest) returns (ChangeResponse);
+    rpc WaitForChange(WaitForChangeRequest) returns (ChangeResponse);
+
+    // Analysis
+    rpc AnalyzeLayout(AnalyzeLayoutRequest) returns (LayoutResponse);
+    rpc DetectElements(DetectElementsRequest) returns (VisualElementsResponse);
 }
 
-message PaddleOcrRequest {
-  bytes image_data = 1;
-  string language = 2;
-  PaddleOcrModel model = 3;
-  bool use_angle_classifier = 4;
-  bool detect_only = 5;
+message CaptureScreenRequest {
+    cascade.SessionContext session = 100;
+    int32 screen_index = 1;
+    CaptureOptions options = 2;
 }
 
-message PaddleOcrResponse {
-  bool success = 1;
-  string error_message = 2;
-  string full_text = 3;
-  double confidence = 4;
-  repeated PaddleOcrLine lines = 5;
-  int32 processing_time_ms = 6;
-  string model_used = 7;
+message CaptureWindowRequest {
+    cascade.SessionContext session = 100;
+    string window_handle = 1;
+    string window_title = 2;
+    CaptureOptions options = 3;
 }
 
-message PaddleOcrLine {
-  string text = 1;
-  repeated PaddleOcrPoint polygon = 2;
-  double confidence = 3;
-  repeated PaddleOcrWord words = 4;
+message CaptureElementRequest {
+    cascade.SessionContext session = 100;
+    string runtime_id = 1;
+    CaptureOptions options = 2;
 }
 
-message PaddleOcrPoint {
-  int32 x = 1;
-  int32 y = 2;
+message CaptureRegionRequest {
+    cascade.SessionContext session = 100;
+    cascade.Rectangle region = 1;
+    CaptureOptions options = 2;
 }
 
-message PaddleOcrWord {
-  string text = 1;
-  repeated PaddleOcrPoint polygon = 2;
-  double confidence = 3;
+message CaptureOptions {
+    string format = 1;
+    int32 jpeg_quality = 2;
+    bool include_cursor = 3;
+    double scale = 4;
 }
 
-message PaddleOcrStatus {
-  bool is_ready = 1;
-  string model_loaded = 2;
-  bool gpu_available = 3;
-  int32 gpu_memory_used_mb = 4;
+message CaptureResponse {
+    cascade.Result result = 1;
+    bytes image_data = 2;
+    int32 width = 3;
+    int32 height = 4;
+    string format = 5;
+    cascade.Rectangle captured_region = 6;
 }
 
-enum PaddleOcrModel {
-  PADDLE_OCR_MODEL_UNSPECIFIED = 0;
-  PADDLE_OCR_MODEL_VITSTR = 1;
-  PADDLE_OCR_MODEL_SVTR = 2;
-  PADDLE_OCR_MODEL_PP_OCRV4 = 3;
+message RecognizeRequest {
+    cascade.SessionContext session = 100;
+    bytes image_data = 1;
+    OcrOptions options = 2;
 }
 
+message OcrOptions {
+    string language = 1;
+    bool preprocess = 2;
+    double min_confidence = 3;
+}
 
+message OcrResponse {
+    cascade.Result result = 1;
+    string full_text = 2;
+    double confidence = 3;
+    repeated OcrLine lines = 4;
+    int32 processing_time_ms = 5;
+}
+
+message OcrLine {
+    string text = 1;
+    cascade.Rectangle bounding_box = 2;
+    double confidence = 3;
+    repeated OcrWord words = 4;
+}
+
+message OcrWord {
+    string text = 1;
+    cascade.Rectangle bounding_box = 2;
+    double confidence = 3;
+}
+
+message FindTextRequest {
+    cascade.SessionContext session = 100;
+    bytes image_data = 1;
+    string search_text = 2;
+    bool case_sensitive = 3;
+}
+
+message FindTextResponse {
+    cascade.Result result = 1;
+    bool found = 2;
+    repeated TextMatch matches = 3;
+}
+
+message TextMatch {
+    string text = 1;
+    cascade.Rectangle bounding_box = 2;
+    double confidence = 3;
+}
+
+message SetBaselineRequest {
+    cascade.SessionContext session = 100;
+    bytes image_data = 1;
+    string baseline_id = 2;
+}
+
+message CompareRequest {
+    cascade.SessionContext session = 100;
+    bytes image_data = 1;
+    string baseline_id = 2;
+    CompareOptions options = 3;
+}
+
+message CompareImagesRequest {
+    cascade.SessionContext session = 100;
+    bytes baseline_image = 1;
+    bytes current_image = 2;
+    CompareOptions options = 3;
+}
+
+message CompareOptions {
+    double change_threshold = 1;
+    bool ignore_antialiasing = 2;
+    int32 color_tolerance = 3;
+    repeated cascade.Rectangle ignore_regions = 4;
+}
+
+message WaitForChangeRequest {
+    cascade.SessionContext session = 100;
+    cascade.Rectangle region = 1;
+    int32 timeout_ms = 2;
+    int32 polling_interval_ms = 3;
+    double change_threshold = 4;
+}
+
+message ChangeResponse {
+    cascade.Result result = 1;
+    bool has_changes = 2;
+    double difference_percentage = 3;
+    repeated cascade.Rectangle changed_regions = 4;
+    bytes difference_image = 5;
+}
+
+message AnalyzeLayoutRequest {
+    cascade.SessionContext session = 100;
+    bytes image_data = 1;
+}
+
+message LayoutResponse {
+    cascade.Result result = 1;
+    string layout_type = 2;
+    cascade.Rectangle content_area = 3;
+    repeated LayoutRegion regions = 4;
+}
+
+message LayoutRegion {
+    string name = 1;
+    string type = 2;
+    cascade.Rectangle bounds = 3;
+}
+
+message DetectElementsRequest {
+    cascade.SessionContext session = 100;
+    bytes image_data = 1;
+    repeated string element_types = 2;
+}
+
+message VisualElementsResponse {
+    cascade.Result result = 1;
+    repeated VisualElement elements = 2;
+}
+
+message VisualElement {
+    string type = 1;
+    cascade.Rectangle bounding_box = 2;
+    double confidence = 3;
+    string text = 4;
+}

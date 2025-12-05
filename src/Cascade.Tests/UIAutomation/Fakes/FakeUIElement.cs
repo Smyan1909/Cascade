@@ -9,6 +9,7 @@ using Cascade.UIAutomation.Discovery;
 using Cascade.UIAutomation.Elements;
 using Cascade.UIAutomation.Models;
 using Cascade.UIAutomation.Patterns;
+using Cascade.UIAutomation.Session;
 using System.Drawing;
 using System.Windows.Automation;
 

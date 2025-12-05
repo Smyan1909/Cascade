@@ -1,0 +1,50 @@
+// Auto-generated Workflow Script
+// Workflow: {{ workflow.name }}
+
+using System.Threading;
+using System.Threading.Tasks;
+using Cascade.Core;
+using Cascade.CodeGen.Execution;
+using Cascade.CodeGen.Generation;
+using Cascade.UIAutomation.Discovery;
+
+namespace {{ namespace }}
+{
+    public class {{ class_name }}
+    {
+        private readonly IElementDiscovery _discovery;
+        private readonly IGeneratedActionExecutor _actionExecutor;
+        private readonly AutomationCallContext _context;
+
+        public {{ class_name }}(
+            IElementDiscovery discovery,
+            IGeneratedActionExecutor actionExecutor,
+            AutomationCallContext context)
+        {
+            _discovery = discovery ?? throw new ArgumentNullException(nameof(discovery));
+            _actionExecutor = actionExecutor ?? throw new ArgumentNullException(nameof(actionExecutor));
+            _context = context ?? throw new ArgumentNullException(nameof(context));
+        }
+
+        {{ for step in workflow.steps }}
+        private async Task Step{{ for.index }}Async(CancellationToken cancellationToken)
+        {
+            var token = cancellationToken == default ? _context.Cancellation : cancellationToken;
+            // {{ step.description }}
+{{ step.code }}
+        }
+        {{ end }}
+
+        public async Task ExecuteAsync(CancellationToken cancellationToken = default)
+        {
+            var token = cancellationToken == default ? _context.Cancellation : cancellationToken;
+            {{ for step in workflow.steps }}
+            await Step{{ for.index }}Async(token).ConfigureAwait(false);
+            {{ if step.delay_after }}
+            await Task.Delay({{ step.delay_after }}, token).ConfigureAwait(false);
+            {{ end }}
+            {{ end }}
+        }
+    }
+}
+

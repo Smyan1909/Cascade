@@ -20,12 +20,16 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+    <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.2.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.0" />
     <PackageReference Include="Moq" Version="4.20.70" />
     <PackageReference Include="FluentAssertions" Version="6.12.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="8.0.0" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.59.0" />
+    <PackageReference Include="Grpc.Core.Testing" Version="2.46.6" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="8.0.1" />
   </ItemGroup>
 
   <ItemGroup>
@@ -33,6 +37,8 @@
     <ProjectReference Include="..\Cascade.UIAutomation\Cascade.UIAutomation.csproj" />
     <ProjectReference Include="..\Cascade.Core\Cascade.Core.csproj" />
     <ProjectReference Include="..\Cascade.Vision\Cascade.Vision.csproj" />
+    <ProjectReference Include="..\Cascade.CodeGen\Cascade.CodeGen.csproj" />
+    <ProjectReference Include="..\Cascade.Grpc.Server\Cascade.Grpc.Server.csproj" />
   </ItemGroup>
 
   <ItemGroup>
