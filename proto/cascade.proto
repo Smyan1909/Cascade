@@ -1,3 +1,134 @@
-// Placeholder for Cascade gRPC schema.
-// Define services/messages/enums per docs/phase1-grpc.md before codegen.
+syntax = "proto3";
+
+package cascade;
+
+import "google/protobuf/empty.proto";
+
+option csharp_namespace = "Cascade.Proto";
+
+// Session-level lifecycle for the Body host.
+service SessionService {
+  // Starts an application by name/identifier and initializes any provider state.
+  rpc StartApp(StartAppRequest) returns (Status);
+  // Resets transient state (cached trees, marks, sessions) without terminating the host.
+  rpc ResetState(google.protobuf.Empty) returns (Status);
+}
+
+// Automation entry points to query UI and execute actions.
+service AutomationService {
+  // Executes an action against a selector on the requested platform.
+  rpc PerformAction(Action) returns (Status);
+  // Returns the semantic tree snapshot for the requested platform.
+  rpc GetSemanticTree(google.protobuf.Empty) returns (SemanticTree);
+}
+
+// Vision utilities for tagged screenshots.
+service VisionService {
+  // Returns a screenshot with numeric marks mapped to UI elements.
+  rpc GetMarkedScreenshot(google.protobuf.Empty) returns (Screenshot);
+}
+
+message StartAppRequest {
+  // Friendly application identifier (e.g., process, bundle, or URL).
+  string app_name = 1;
+}
+
+message Status {
+  bool success = 1;
+  string message = 2;
+}
+
+message SemanticTree {
+  repeated UIElement elements = 1;
+}
+
+message UIElement {
+  // Stable ID within a session; provider is responsible for consistency.
+  string id = 1;
+  string name = 2;
+  ControlType control_type = 3;
+  NormalizedRectangle bounding_box = 4;
+  string parent_id = 5;
+  PlatformSource platform_source = 6;
+  // Optional accessibility/automation hints that vary by platform.
+  optional string aria_role = 7;
+  optional string automation_id = 8;
+  optional string value_text = 9;
+}
+
+message Selector {
+  PlatformSource platform_source = 1;
+  // Provider-specific path components; interpretation is platform-specific but normalized here.
+  repeated string path = 2;
+  // Optional filters to disambiguate elements.
+  optional string id = 3;
+  optional string name = 4;
+  optional ControlType control_type = 5;
+  optional int32 index = 6;
+  optional string text_hint = 7;
+}
+
+message Action {
+  ActionType action_type = 1;
+  Selector selector = 2;
+  // Optional payload for the action (text entry, numeric input, or structured JSON).
+  oneof payload {
+    string text = 3;
+    double number = 4;
+    string json_payload = 5;
+  }
+}
+
+message Screenshot {
+  bytes image = 1;
+  ImageFormat format = 2;
+  repeated Mark marks = 3;
+}
+
+message Mark {
+  string element_id = 1;
+  string label = 2;
+}
+
+message NormalizedRectangle {
+  // Normalized coordinates (0-1) relative to the capture surface.
+  double x = 1;
+  double y = 2;
+  double width = 3;
+  double height = 4;
+}
+
+enum ActionType {
+  ACTION_TYPE_UNSPECIFIED = 0;
+  CLICK = 1;
+  TYPE_TEXT = 2;
+  HOVER = 3;
+  FOCUS = 4;
+  SCROLL = 5;
+  WAIT_VISIBLE = 6;
+}
+
+enum PlatformSource {
+  PLATFORM_SOURCE_UNSPECIFIED = 0;
+  WINDOWS = 1;
+  JAVA = 2;
+  WEB = 3;
+}
+
+enum ControlType {
+  CONTROL_TYPE_UNSPECIFIED = 0;
+  BUTTON = 1;
+  INPUT = 2;
+  COMBO = 3;
+  MENU = 4;
+  TREE = 5;
+  TABLE = 6;
+  CUSTOM = 7;
+}
+
+enum ImageFormat {
+  IMAGE_FORMAT_UNSPECIFIED = 0;
+  PNG = 1;
+  JPEG = 2;
+}
 
