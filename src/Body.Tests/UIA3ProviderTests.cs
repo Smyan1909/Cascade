@@ -17,15 +17,17 @@ namespace Cascade.Body.Tests;
 public class UIA3ProviderTests : IDisposable
 {
     private readonly UIA3AutomationProvider _provider;
+    private readonly OcrService _ocrService;
     private readonly ITestOutputHelper? _output;
 
     public UIA3ProviderTests(ITestOutputHelper? output = null)
     {
         _output = output;
+        _ocrService = new OcrService(TestHelpers.Options(new OcrOptions { Enabled = true, LanguageTag = "en-US" }), TestHelpers.Logger<OcrService>());
         _provider = new UIA3AutomationProvider(
             TestHelpers.Options(new UIA3Options { ActionTimeoutMs = 12000, MaxNodes = 800, TreeDepth = 8 }),
             TestHelpers.Logger<UIA3AutomationProvider>(),
-            new OcrService(TestHelpers.Options(new OcrOptions { Enabled = false }), TestHelpers.Logger<OcrService>()));
+            _ocrService);
     }
 
     [Fact]
@@ -164,6 +166,18 @@ public class UIA3ProviderTests : IDisposable
 
         var screenshot = await _provider.GetMarkedScreenshotAsync(CancellationToken.None);
         screenshot.Image.Length.Should().BeGreaterThan(0, "Screenshot should be captured successfully");
+
+        // Test OCR on the screenshot - should detect the typed text
+        var ocrResult = await _ocrService.ExtractAsync(screenshot.Image.ToByteArray(), CancellationToken.None);
+        ocrResult.Text.Should().NotBeNullOrWhiteSpace("OCR should extract text from Notepad screenshot");
+        
+        // OCR should detect "scroll-test-line" or at least "scroll" or "test"
+        var ocrText = ocrResult.Text.ToUpperInvariant();
+        var hasExpectedText = ocrText.Contains("SCROLL") || ocrText.Contains("TEST") || ocrText.Contains("LINE");
+        hasExpectedText.Should().BeTrue($"OCR should detect the typed text. OCR text: '{ocrResult.Text}'");
+        
+        _output?.WriteLine($"OCR extracted text from Notepad: '{ocrResult.Text}'");
+        _output?.WriteLine($"OCR found {ocrResult.Regions.Count} text regions");
     }
 
     public void Dispose()

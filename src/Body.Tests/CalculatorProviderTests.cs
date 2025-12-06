@@ -16,12 +16,15 @@ public class CalculatorProviderTests : IDisposable
 {
     private readonly UIA3AutomationProvider _provider;
 
+    private readonly OcrService _ocrService;
+
     public CalculatorProviderTests()
     {
+        _ocrService = new OcrService(TestHelpers.Options(new OcrOptions { Enabled = true, LanguageTag = "en-US" }), TestHelpers.Logger<OcrService>());
         _provider = new UIA3AutomationProvider(
             TestHelpers.Options(new UIA3Options { ActionTimeoutMs = 12000, MaxNodes = 800, TreeDepth = 8 }),
             TestHelpers.Logger<UIA3AutomationProvider>(),
-            new OcrService(TestHelpers.Options(new OcrOptions { Enabled = false }), TestHelpers.Logger<OcrService>()));
+            _ocrService);
     }
 
     [Fact]
@@ -113,9 +116,21 @@ public class CalculatorProviderTests : IDisposable
             }
         }
 
-        // Capture screenshot and ensure we get marks; OCR is disabled here but screenshot validates capture.
+        // Capture screenshot and verify OCR can read the calculator display
         var screenshot = await _provider.GetMarkedScreenshotAsync(CancellationToken.None);
-        screenshot.Image.Length.Should().BeGreaterThan(0);
+        screenshot.Image.Length.Should().BeGreaterThan(0, "Screenshot should be captured");
+
+        // Test OCR on the screenshot - should detect the digits we clicked
+        var ocrResult = await _ocrService.ExtractAsync(screenshot.Image.ToByteArray(), CancellationToken.None);
+        ocrResult.Text.Should().NotBeNullOrWhiteSpace("OCR should extract text from calculator screenshot");
+        
+        // OCR should detect "12" or at least "1" and "2" somewhere in the text
+        var ocrText = ocrResult.Text.ToUpperInvariant();
+        var hasDigits = ocrText.Contains("12") || (ocrText.Contains("1") && ocrText.Contains("2"));
+        hasDigits.Should().BeTrue($"OCR should detect the clicked digits. OCR text: '{ocrResult.Text}'");
+        
+        System.Console.WriteLine($"OCR extracted text from calculator: '{ocrResult.Text}'");
+        System.Console.WriteLine($"OCR found {ocrResult.Regions.Count} text regions");
     }
 
     private async Task ClickButton(string name)
