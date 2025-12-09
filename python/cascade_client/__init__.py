@@ -7,6 +7,7 @@ Used by Explorer, Worker, and Orchestrator agents.
 
 from cascade_client.auth.context import CascadeContext
 from cascade_client.grpc_client import CascadeGrpcClient
+from cascade_client.a2a import AgentA2AClient
 from cascade_client.models import (
     Action,
     ActionType,
@@ -48,6 +49,7 @@ from cascade_client.vision import get_marked_screenshot
 __all__ = [
     # Client
     "CascadeGrpcClient",
+    "AgentA2AClient",
     # Context
     "CascadeContext",
     # Models

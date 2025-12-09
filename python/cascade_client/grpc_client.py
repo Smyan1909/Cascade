@@ -8,15 +8,24 @@ deadline management, and lazy channel creation.
 import asyncio
 import os
 import time
-from typing import Optional, TYPE_CHECKING
+from typing import AsyncIterator, Iterator, Optional, TYPE_CHECKING
 
 import grpc
 
 from cascade_client.models import (
     Action,
+    AgentAck,
+    AgentEnvelope,
+    AgentInboxRequest,
+    AgentMessage,
+    AgentRegisterRequest,
+    AgentRegisterResponse,
     SemanticTree,
     StartAppRequest,
     Status,
+    WorkerEvent,
+    WorkerResumeRequest,
+    WorkerRunRequest,
 )
 
 if TYPE_CHECKING:
@@ -62,6 +71,8 @@ class CascadeGrpcClient:
     DEADLINE_SCREENSHOT = 60.0  # Longer deadline for screenshots
     DEADLINE_ACTION = 30.0  # Medium deadline for actions
     DEADLINE_SESSION = 30.0  # Medium deadline for session operations
+    DEADLINE_WORKER = 300.0  # Longer deadline for worker streams
+    DEADLINE_A2A = 120.0  # Agent-to-agent streams/operations
 
     # Retry configuration
     MAX_RETRIES = 3
@@ -104,6 +115,8 @@ class CascadeGrpcClient:
             cascade_pb2_grpc.AutomationServiceStub
         ] = None
         self._vision_stub: Optional[cascade_pb2_grpc.VisionServiceStub] = None
+        self._worker_stub: Optional[cascade_pb2_grpc.WorkerServiceStub] = None
+        self._agent_stub: Optional[cascade_pb2_grpc.AgentCommServiceStub] = None
 
     def _get_channel(self) -> grpc.Channel:
         """Get or create gRPC channel (lazy initialization)."""
@@ -147,6 +160,30 @@ class CascadeGrpcClient:
                 self._get_channel()
             )
         return self._vision_stub
+
+    def _get_worker_stub(self):
+        """Get or create worker service stub."""
+        if cascade_pb2_grpc is None:
+            raise ImportError(
+                "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
+            )
+        if self._worker_stub is None:
+            self._worker_stub = cascade_pb2_grpc.WorkerServiceStub(
+                self._get_channel()
+            )
+        return self._worker_stub
+
+    def _get_agent_stub(self):
+        """Get or create agent communication service stub."""
+        if cascade_pb2_grpc is None:
+            raise ImportError(
+                "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
+            )
+        if self._agent_stub is None:
+            self._agent_stub = cascade_pb2_grpc.AgentCommServiceStub(
+                self._get_channel()
+            )
+        return self._agent_stub
 
     def _is_retryable_error(self, error: grpc.RpcError) -> bool:
         """Check if error is retryable."""
@@ -492,6 +529,237 @@ class CascadeGrpcClient:
         )
         return proto_response
 
+    # Worker Service - Sync
+    def start_worker_run(self, request: WorkerRunRequest) -> Iterator[WorkerEvent]:
+        """
+        Start a worker run and stream progress events (sync).
+        """
+        proto_request = request.to_proto()
+        try:
+            responses = self._get_worker_stub().StartWorkerRun(
+                proto_request, timeout=self.DEADLINE_WORKER
+            )
+            for resp in responses:
+                yield WorkerEvent.from_proto(resp)
+        except grpc.RpcError as e:
+            if self._is_retryable_error(e):
+                raise RetryableError(
+                    f"Retryable worker stream error: {e.code()} - {e.details()}"
+                ) from e
+            raise NonRetryableError(
+                f"Non-retryable worker stream error: {e.code()} - {e.details()}"
+            ) from e
+
+    def resume_worker_run(
+        self, request: WorkerResumeRequest
+    ) -> Iterator[WorkerEvent]:
+        """
+        Resume a worker run from a checkpoint and stream progress events (sync).
+        """
+        proto_request = request.to_proto()
+        try:
+            responses = self._get_worker_stub().ResumeWorkerRun(
+                proto_request, timeout=self.DEADLINE_WORKER
+            )
+            for resp in responses:
+                yield WorkerEvent.from_proto(resp)
+        except grpc.RpcError as e:
+            if self._is_retryable_error(e):
+                raise RetryableError(
+                    f"Retryable worker resume error: {e.code()} - {e.details()}"
+                ) from e
+            raise NonRetryableError(
+                f"Non-retryable worker resume error: {e.code()} - {e.details()}"
+            ) from e
+
+    # Worker Service - Async (wraps sync stream in executor)
+    async def start_worker_run_async(
+        self, request: WorkerRunRequest
+    ) -> AsyncIterator[WorkerEvent]:
+        """
+        Start a worker run and stream progress events (async).
+
+        Note: wraps the sync stream in a thread executor; events are yielded
+        as they arrive but this still blocks one worker thread.
+        """
+
+        loop = asyncio.get_event_loop()
+        iterator = self.start_worker_run(request)
+
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _pump():
+            try:
+                for event in iterator:
+                    loop.call_soon_threadsafe(queue.put_nowait, event)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        await loop.run_in_executor(None, _pump)
+
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield item
+
+    async def resume_worker_run_async(
+        self, request: WorkerResumeRequest
+    ) -> AsyncIterator[WorkerEvent]:
+        """
+        Resume a worker run from a checkpoint and stream progress events (async).
+        """
+        loop = asyncio.get_event_loop()
+        iterator = self.resume_worker_run(request)
+
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _pump():
+            try:
+                for event in iterator:
+                    loop.call_soon_threadsafe(queue.put_nowait, event)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        await loop.run_in_executor(None, _pump)
+
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield item
+
+    # AgentComm Service - Sync
+    def register_agent(self, request: AgentRegisterRequest) -> AgentRegisterResponse:
+        """Register this agent instance for A2A messaging."""
+        proto_request = request.to_proto()
+
+        def _call():
+            return self._get_agent_stub().RegisterAgent(
+                proto_request, timeout=self.DEADLINE_A2A
+            )
+
+        proto_resp = self._retry_call(_call, self.DEADLINE_A2A)
+        return AgentRegisterResponse.from_proto(proto_resp)
+
+    def send_agent_message(self, message: AgentMessage) -> Status:
+        """Send an A2A message."""
+        proto_msg = message.to_proto()
+
+        def _call():
+            return self._get_agent_stub().SendAgentMessage(
+                proto_msg, timeout=self.DEADLINE_A2A
+            )
+
+        proto_resp = self._retry_call(_call, self.DEADLINE_A2A)
+        return Status.from_proto(proto_resp)
+
+    def stream_agent_inbox(
+        self, request: AgentInboxRequest
+    ) -> Iterator[AgentEnvelope]:
+        """Stream inbox messages for this agent (sync iterator)."""
+        proto_req = request.to_proto()
+        try:
+            responses = self._get_agent_stub().StreamAgentInbox(
+                proto_req, timeout=self.DEADLINE_A2A
+            )
+            for resp in responses:
+                yield AgentEnvelope.from_proto(resp)
+        except grpc.RpcError as e:
+            if self._is_retryable_error(e):
+                raise RetryableError(
+                    f"Retryable A2A stream error: {e.code()} - {e.details()}"
+                ) from e
+            raise NonRetryableError(
+                f"Non-retryable A2A stream error: {e.code()} - {e.details()}"
+            ) from e
+
+    def ack_agent_message(self, ack: AgentAck) -> Status:
+        """Acknowledge processing of an A2A message."""
+        proto_ack = ack.to_proto()
+
+        def _call():
+            return self._get_agent_stub().AckAgentMessage(
+                proto_ack, timeout=self.DEADLINE_A2A
+            )
+
+        proto_resp = self._retry_call(_call, self.DEADLINE_A2A)
+        return Status.from_proto(proto_resp)
+
+    # AgentComm Service - Async wrappers
+    async def register_agent_async(
+        self, request: AgentRegisterRequest
+    ) -> AgentRegisterResponse:
+        """Async registration helper."""
+
+        async def _call():
+            loop = asyncio.get_event_loop()
+            proto_req = request.to_proto()
+            return await loop.run_in_executor(
+                None,
+                lambda: self._get_agent_stub().RegisterAgent(
+                    proto_req, timeout=self.DEADLINE_A2A
+                ),
+            )
+
+        proto_resp = await self._retry_call_async(_call, self.DEADLINE_A2A)
+        return AgentRegisterResponse.from_proto(proto_resp)
+
+    async def send_agent_message_async(self, message: AgentMessage) -> Status:
+        """Async send helper."""
+        async def _call():
+            loop = asyncio.get_event_loop()
+            proto_msg = message.to_proto()
+            return await loop.run_in_executor(
+                None,
+                lambda: self._get_agent_stub().SendAgentMessage(
+                    proto_msg, timeout=self.DEADLINE_A2A
+                ),
+            )
+
+        proto_resp = await self._retry_call_async(_call, self.DEADLINE_A2A)
+        return Status.from_proto(proto_resp)
+
+    async def stream_agent_inbox_async(
+        self, request: AgentInboxRequest
+    ) -> AsyncIterator[AgentEnvelope]:
+        """Async iterator over inbox messages (wraps sync stream in executor)."""
+        loop = asyncio.get_event_loop()
+        iterator = self.stream_agent_inbox(request)
+
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _pump():
+            try:
+                for env in iterator:
+                    loop.call_soon_threadsafe(queue.put_nowait, env)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        await loop.run_in_executor(None, _pump)
+
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield item
+
+    async def ack_agent_message_async(self, ack: AgentAck) -> Status:
+        """Async ack helper."""
+
+        async def _call():
+            loop = asyncio.get_event_loop()
+            proto_ack = ack.to_proto()
+            return await loop.run_in_executor(
+                None,
+                lambda: self._get_agent_stub().AckAgentMessage(
+                    proto_ack, timeout=self.DEADLINE_A2A
+                ),
+            )
+
+        proto_resp = await self._retry_call_async(_call, self.DEADLINE_A2A)
+        return Status.from_proto(proto_resp)
+
     # Health Check
     def health_check(self) -> bool:
         """
@@ -529,6 +797,8 @@ class CascadeGrpcClient:
             self._session_stub = None
             self._automation_stub = None
             self._vision_stub = None
+            self._worker_stub = None
+            self._agent_stub = None
 
     def __enter__(self):
         """Context manager entry."""
