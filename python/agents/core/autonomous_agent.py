@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.tools import StructuredTool
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langgraph.checkpoint.memory import MemorySaver
 
 from mcp_server.tool_registry import ToolRegistry
@@ -102,7 +102,7 @@ def _get_langchain_model(temperature: float = 0.2):
     """Get a LangChain chat model from environment."""
     import os
     provider = os.getenv("CASCADE_MODEL_PROVIDER", "openai").lower()
-    model_name = os.getenv("CASCADE_MODEL_NAME", "gpt-4")
+    model_name = os.getenv("CASCADE_MODEL_NAME", "gpt-5.2")
     api_key = os.getenv("CASCADE_MODEL_API_KEY")
     
     if provider == "openai":
@@ -140,10 +140,10 @@ class ReActVerifier:
         self._model = _get_langchain_model(temperature=0.1)
         self._checkpointer = MemorySaver()
         
-        self._agent = create_react_agent(
+        self._agent = create_agent(
             model=self._model,
             tools=self._tools,
-            state_modifier=self._system_prompt,
+            system_prompt=self._system_prompt,
             checkpointer=self._checkpointer,
         )
 
@@ -260,10 +260,10 @@ class AutonomousAgent:
         self._model = _get_langchain_model(self._config.temperature)
         self._checkpointer = MemorySaver() if self._config.enable_checkpointing else None
         
-        self._agent = create_react_agent(
+        self._agent = create_agent(
             model=self._model,
             tools=self._tools,
-            state_modifier=self._system_prompt,
+            system_prompt=self._system_prompt,
             checkpointer=self._checkpointer,
         )
 

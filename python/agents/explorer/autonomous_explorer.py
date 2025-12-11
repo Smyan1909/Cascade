@@ -66,15 +66,26 @@ def node_discover(state: ExplorerState, context: CascadeContext) -> ExplorerStat
     """Discovery phase: Parse instructions and find missing capabilities."""
     instructions = state.get("instructions", {})
     
-    # Extract tasks from instructions
+    # Extract tasks from instructions - handle multiple formats
     tasks = []
-    if "coverage_data" in instructions:
+    
+    # Format 1: coverage dict with categories (e.g., basic, memory, scientific)
+    if "coverage" in instructions:
+        for category, items in instructions["coverage"].items():
+            if isinstance(items, list):
+                for item in items:
+                    tasks.append({"name": item, "category": category})
+    
+    # Format 2: coverage_data list
+    elif "coverage_data" in instructions:
         for item in instructions["coverage_data"]:
             tasks.append({
                 "name": item.get("capability", item.get("name", "")),
                 "constraints": item.get("constraints", []),
                 "expected_outputs": item.get("expected_outputs", []),
             })
+    
+    # Format 3: tasks list
     elif "tasks" in instructions:
         for task in instructions["tasks"]:
             tasks.append(task if isinstance(task, dict) else {"name": task})
@@ -146,14 +157,14 @@ def node_observe(state: ExplorerState, grpc_client: CascadeGrpcClient) -> Explor
     print("[Explorer] Observing UI...")
     
     observer = Observer(grpc_client)
-    semantic_tree = observer.get_semantic_tree()
-    ui_elements = semantic_tree.get("elements", []) if semantic_tree else []
+    semantic_tree = observer.fetch_semantic_tree()
+    ui_elements = getattr(semantic_tree, 'elements', []) if semantic_tree else []
     
     print(f"[Explorer] Got semantic tree with {len(ui_elements)} elements")
     return {**state, "ui_elements": ui_elements}
 
 
-def node_generate_skills(state: ExplorerState) -> ExplorerState:
+def node_generate_skills(state: ExplorerState, context: CascadeContext) -> ExplorerState:
     """Generate skill map from observations."""
     missing = state.get("missing_capabilities", [])
     ui_elements = state.get("ui_elements", [])
@@ -165,34 +176,46 @@ def node_generate_skills(state: ExplorerState) -> ExplorerState:
     for i, task in enumerate(missing):
         name = task.get("name", f"task_{i}")
         
-        # Try to find matching UI element
+        # Try to find matching UI element (ui_elements are SemanticTreeElement objects)
         matching_element = None
         for elem in ui_elements:
-            elem_name = elem.get("name", "").lower()
+            elem_name = (getattr(elem, 'name', '') or '').lower()
             if name.lower() in elem_name or elem_name in name.lower():
                 matching_element = elem
                 break
         
         if matching_element:
+            # Create proper Selector object
+            from cascade_client.models import Selector, PlatformSource
+            selector = Selector(
+                platform_source=getattr(matching_element, 'platform_source', PlatformSource.PLATFORM_SOURCE_UNSPECIFIED),
+                path=[getattr(matching_element, 'id', '')],
+                name=getattr(matching_element, 'name', ''),
+                control_type=getattr(matching_element, 'control_type', ''),
+            )
             steps.append(SkillStep(
-                action="click",
-                selector=matching_element.get("automation_id") or matching_element.get("name", ""),
-                description=f"Execute: {name}",
+                action="Click",
+                selector=selector,
+                step_description=f"Execute: {name}",
             ))
         else:
+            # No matching element - skip or create placeholder
             steps.append(SkillStep(
-                action="ui_action",
-                selector=name,
-                description=f"TODO: Implement {name}",
+                action="Click",
+                step_description=f"TODO: Find element for {name}",
             ))
     
     print(f"[Explorer] Generated {len(steps)} steps")
     
-    # Create skill map
+    # Create skill map with required fields
+    app_id = context.app_id
+    user_id = context.user_id
+    
     skill_map = SkillMap(
         metadata=SkillMetadata(
             skill_id=str(uuid.uuid4()),
-            app_name=app_name,
+            app_id=app_id,
+            user_id=user_id,
             capability=", ".join(t.get("name", "unknown") for t in missing[:3]),
             description=f"Automation skills for {app_name}",
         ),
@@ -247,7 +270,7 @@ def build_explorer_graph(
     graph.add_node("discover_apis", node_discover_apis)
     graph.add_node("launch_app", lambda s: node_launch_app(s, grpc_client))
     graph.add_node("observe", lambda s: node_observe(s, grpc_client))
-    graph.add_node("generate_skills", node_generate_skills)
+    graph.add_node("generate_skills", lambda s: node_generate_skills(s, context))
     graph.add_node("save_skill", lambda s: node_save_skill(s, context))
     
     # Define flow
