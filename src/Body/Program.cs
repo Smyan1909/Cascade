@@ -36,8 +36,8 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 
 // Providers and supporting services.
-builder.Services.AddSingleton<UIA3AutomationProvider>();
-builder.Services.AddSingleton<PlaywrightAutomationProvider>();
+builder.Services.AddSingleton<IAutomationProvider, UIA3AutomationProvider>();
+builder.Services.AddSingleton<IAutomationProvider, PlaywrightAutomationProvider>();
 builder.Services.AddSingleton<AutomationRouter>();
 builder.Services.AddSingleton<MarkerService>();
 builder.Services.AddSingleton<OcrService>();
@@ -46,12 +46,14 @@ builder.Services.AddSingleton<OcrService>();
 builder.Services.AddScoped<SessionService>();
 builder.Services.AddScoped<AutomationService>();
 builder.Services.AddScoped<VisionService>();
+builder.Services.AddSingleton<AgentCommService>();
 
 var app = builder.Build();
 
 app.MapGrpcService<SessionService>();
 app.MapGrpcService<AutomationService>();
 app.MapGrpcService<VisionService>();
+app.MapGrpcService<AgentCommService>();
 
 if (app.Environment.IsDevelopment())
 {

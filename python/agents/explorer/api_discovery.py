@@ -24,8 +24,12 @@ class ApiDiscovery:
 
     def discover_via_web(self, app_name: str, top_k: int = 5) -> List[Dict[str, Any]]:
         query = f"{app_name} API documentation"
-        results = self._search.search(query, top_k=top_k)
-        return results
+        try:
+            results = self._search.search(query, top_k=top_k)
+            return results
+        except Exception as e:
+            print(f"[ApiDiscovery] Web search unavailable: {e}")
+            return []
 
     def probe_endpoint(
         self,

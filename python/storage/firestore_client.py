@@ -17,6 +17,25 @@ class FirestoreClient:
     def _ensure_client(self):
         if self._client is not None:
             return self._client
+        
+        # Check for emulator first
+        import os
+        if os.getenv("FIRESTORE_EMULATOR_HOST"):
+            print("[Firestore] Connecting to Emulator (Direct Client)")
+            try:
+                from google.cloud import firestore
+                from google.auth import credentials as ga_credentials
+                
+                # Direct instantiation bypasses firebase_admin strict checks
+                self._client = firestore.Client(
+                    project="cascade-prototype",
+                    credentials=ga_credentials.AnonymousCredentials()
+                )
+                return self._client
+            except ImportError as exc:
+                print(f"[Firestore] Emulator init failed: {exc}")
+                # Fall through to standard init
+
         try:
             import firebase_admin
             from firebase_admin import credentials, firestore
@@ -25,7 +44,7 @@ class FirestoreClient:
                 "firebase-admin is required for Firestore operations"
             ) from exc
 
-        if not firebase_admin._apps:  # type: ignore[attr-defined]
+        if not firebase_admin._apps:
             cred = credentials.ApplicationDefault()
             firebase_admin.initialize_app(cred)
         self._client = firestore.client()
