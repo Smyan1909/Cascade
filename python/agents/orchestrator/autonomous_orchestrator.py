@@ -1,13 +1,10 @@
-"""Autonomous Orchestrator: LangGraph-based Plan-Execute-Verify architecture."""
+"""Autonomous Orchestrator: LLM-driven coordination using tools."""
 
 from __future__ import annotations
 
 import json
-import re
 import uuid
-from typing import Any, Dict, List, Optional, TypedDict
-
-from langgraph.graph import StateGraph, END
+from typing import Any, Dict, Optional
 
 from cascade_client.auth.context import CascadeContext
 from cascade_client.grpc_client import CascadeGrpcClient
@@ -17,236 +14,23 @@ from mcp_server.body_tools import register_body_tools
 from mcp_server.explorer_tools import register_explorer_tools
 
 from agents.core.autonomous_agent import (
-    AgentConfig, AgentResult, AgentStatus, ReActVerifier
+    AgentConfig, AgentResult, AgentStatus, AutonomousAgent
 )
-from agents.core.verify_prompts import ORCHESTRATOR_VERIFY_PROMPT, get_orchestrator_verify_task
+from .prompts_autonomous import ORCHESTRATOR_SYSTEM_PROMPT, get_orchestrator_task
 
 
-# ============================================================
-# Prompts
-# ============================================================
-
-ORCHESTRATOR_PLAN_PROMPT = """You are an Orchestrator planner for the Cascade agent system.
-
-Analyze the user's goal and create a plan with sub-tasks.
-
-Respond in this JSON format:
-{
-    "understanding": "Brief summary of the goal",
-    "sub_tasks": [
-        {"id": 1, "type": "explore" | "execute", "description": "What to do", "app_name": "optional app"},
-        ...
-    ],
-    "success_criteria": "How to know goal is achieved"
-}
-
-Types:
-- "explore": Use Explorer to learn an app and create skill maps
-- "execute": Use Worker to perform a specific action
-"""
-
-
-# ============================================================
-# State Definition
-# ============================================================
-
-class OrchestratorState(TypedDict, total=False):
-    """State for the Orchestrator LangGraph."""
-    # Input
-    run_id: str
-    goal: str
-    additional_instructions: str
-    
-    # Planning phase
-    plan: Optional[Dict[str, Any]]
-    sub_tasks: List[Dict[str, Any]]
-    
-    # Execution phase
-    current_task_index: int
-    task_results: List[Dict[str, Any]]
-    actions_log: List[str]
-    
-    # Verification phase
-    verification_result: Optional[Dict[str, Any]]
-    
-    # Final
-    status: str
-    error: Optional[str]
-
-
-# ============================================================
-# Node Functions
-# ============================================================
-
-def node_plan(state: OrchestratorState) -> OrchestratorState:
-    """Create a plan for the goal."""
-    from agents.core.autonomous_agent import _get_langchain_model
-    
-    goal = state.get("goal", "")
-    additional = state.get("additional_instructions", "")
-    
-    print("[Orchestrator] === PHASE 1: PLANNING ===")
-    print(f"[Orchestrator] Goal: {goal}")
-    
-    model = _get_langchain_model(temperature=0.2)
-    
-    prompt = f"{ORCHESTRATOR_PLAN_PROMPT}\n\nGoal: {goal}"
-    if additional:
-        prompt += f"\n\nAdditional: {additional}"
-    
-    try:
-        response = model.invoke(prompt)
-        content = response.content
-        
-        # Parse JSON from response
-        json_match = re.search(r'\{[\s\S]*\}', content)
-        if json_match:
-            plan = json.loads(json_match.group())
-            sub_tasks = plan.get("sub_tasks", [])
-            print(f"[Orchestrator] Created plan with {len(sub_tasks)} sub-tasks")
-            
-            return {
-                **state,
-                "plan": plan,
-                "sub_tasks": sub_tasks,
-                "actions_log": [f"Plan: {plan.get('understanding', goal)}"],
-            }
-    except Exception as e:
-        print(f"[Orchestrator] Planning error: {e}")
-    
-    return {**state, "plan": None, "sub_tasks": [], "error": "Planning failed"}
-
-
-def node_execute_tasks(
-    state: OrchestratorState,
-    context: CascadeContext,
-    grpc_client: CascadeGrpcClient,
-    max_explorer_iters: int,
-    max_worker_iters: int,
-    verbose: bool,
-) -> OrchestratorState:
-    """Execute all sub-tasks sequentially."""
-    sub_tasks = state.get("sub_tasks", [])
-    actions_log = state.get("actions_log", []).copy()
-    task_results = []
-    
-    if not sub_tasks:
-        return {**state, "task_results": [], "error": "No sub-tasks to execute"}
-    
-    print("[Orchestrator] === PHASE 2: EXECUTION ===")
-    
-    for i, task in enumerate(sub_tasks):
-        task_type = task.get("type", "execute")
-        description = task.get("description", "")
-        app_name = task.get("app_name", "")
-        
-        print(f"[Orchestrator] Sub-task {i+1}/{len(sub_tasks)}: {task_type} - {description[:50]}...")
-        
-        if task_type == "explore":
-            result = _run_explorer(context, grpc_client, app_name or description, max_explorer_iters, verbose)
-            actions_log.append(f"Explored: {app_name or description} -> {result.status.value}")
-        else:
-            result = _run_worker(context, grpc_client, description, app_name, max_worker_iters, verbose)
-            actions_log.append(f"Executed: {description[:50]} -> {result.status.value}")
-        
-        task_results.append({
-            "task_id": task.get("id", i),
-            "type": task_type,
-            "status": result.status.value,
-            "error": result.error,
-        })
-        
-        if result.status == AgentStatus.FAILED:
-            print(f"[Orchestrator] Sub-task failed: {result.error}")
-    
-    return {**state, "task_results": task_results, "actions_log": actions_log}
-
-
-def _run_explorer(
-    context: CascadeContext,
-    grpc_client: CascadeGrpcClient,
-    app_name: str,
-    max_iters: int,
-    verbose: bool,
-) -> AgentResult:
-    """Run Explorer on an app."""
-    from agents.explorer.autonomous_explorer import HybridExplorer
-    
-    explorer = HybridExplorer(context, grpc_client, max_verify_iterations=10, verbose=verbose)
-    return explorer.explore(app_name, skip_verify=True)  # Orchestrator does its own verify
-
-
-def _run_worker(
-    context: CascadeContext,
-    grpc_client: CascadeGrpcClient,
-    task: str,
-    app_name: str,
-    max_iters: int,
-    verbose: bool,
-) -> AgentResult:
-    """Run Worker on a task."""
-    from agents.worker.autonomous_worker import AutonomousWorker
-    
-    config = AgentConfig(max_iterations=max_iters, verbose=verbose)
-    worker = AutonomousWorker(context, grpc_client, config)
-    return worker.execute(task, app_name)
-
-
-def should_continue_to_verify(state: OrchestratorState) -> str:
-    """Decide whether to verify or end early."""
-    if state.get("error"):
-        return "end_early"
-    if not state.get("plan"):
-        return "end_early"
-    return "verify"
-
-
-# ============================================================
-# Graph Builder
-# ============================================================
-
-def build_orchestrator_graph(
-    context: CascadeContext,
-    grpc_client: CascadeGrpcClient,
-    max_explorer_iters: int = 50,
-    max_worker_iters: int = 30,
-    verbose: bool = True,
-) -> StateGraph:
-    """Build the LangGraph for orchestration."""
-    
-    graph = StateGraph(OrchestratorState)
-    
-    # Add nodes with bound dependencies
-    graph.add_node("plan", node_plan)
-    graph.add_node(
-        "execute_tasks",
-        lambda s: node_execute_tasks(s, context, grpc_client, max_explorer_iters, max_worker_iters, verbose)
-    )
-    
-    # Define flow
-    graph.set_entry_point("plan")
-    graph.add_conditional_edges(
-        "plan",
-        lambda s: "execute" if s.get("plan") else "end_early",
-        {"execute": "execute_tasks", "end_early": END}
-    )
-    graph.add_edge("execute_tasks", END)  # Verification handled externally
-    
-    return graph.compile()
-
-
-# ============================================================
-# HybridOrchestrator Class
-# ============================================================
-
-class HybridOrchestrator:
+class AutonomousOrchestrator:
     """
-    Orchestrator using LangGraph for Plan/Execute and ReAct for Verify.
+    Autonomous Orchestrator that uses LLM-driven coordination.
     
     Architecture:
-    - Plan: LLM decomposes goal into sub-tasks (LangGraph)
-    - Execute: Run Explorer/Worker for each sub-task (LangGraph)
-    - Verify: ReAct loop to confirm goal achieved (ReAct)
+    - Pure agentic loop where LLM uses tools to coordinate
+    - Can run Explorer to learn apps (via run_explorer tool)
+    - Can run Worker to execute tasks (via run_worker tool)
+    - Uses vision and semantic tree to monitor progress
+    - LLM reasons about what to do and when
+    
+    No programmatic planning - the LLM does ALL the reasoning.
     """
 
     def __init__(
@@ -254,56 +38,134 @@ class HybridOrchestrator:
         context: CascadeContext,
         grpc_client: CascadeGrpcClient,
         config: Optional[Any] = None,  # Accept config for CLI compatibility
+        max_iterations: int = 50,
         max_explorer_iterations: int = 50,
         max_worker_iterations: int = 30,
-        max_verify_iterations: int = 10,
         verbose: bool = True,
     ):
         self._context = context
         self._grpc = grpc_client
+        self._max_iterations = max_iterations
         self._max_explorer_iters = max_explorer_iterations
         self._max_worker_iters = max_worker_iterations
-        self._max_verify_iters = max_verify_iterations
         self._verbose = verbose
         
         # Handle config if passed from CLI
         if config:
+            self._max_iterations = getattr(config, 'max_orchestrator_iterations', max_iterations)
             self._max_explorer_iters = getattr(config, 'max_explorer_iterations', max_explorer_iterations)
             self._max_worker_iters = getattr(config, 'max_worker_iterations', max_worker_iterations)
             self._verbose = getattr(config, 'verbose', verbose)
         
-        # Build LangGraph
-        self._graph = build_orchestrator_graph(
-            context, grpc_client,
-            self._max_explorer_iters, self._max_worker_iters, self._verbose
-        )
-        
-        # Setup tool registry for verification
+        # Setup tool registry
         self._registry = ToolRegistry()
         register_body_tools(self._registry, grpc_client)
         register_explorer_tools(self._registry)
-        self._add_list_skills_tool()
+        self._add_orchestration_tools()
 
-    def _add_list_skills_tool(self) -> None:
-        """Add tool to list available skills."""
-        from storage.firestore_client import FirestoreClient
+    def _add_orchestration_tools(self) -> None:
+        """Add tools for coordinating Explorer and Worker agents."""
+        context = self._context
+        grpc = self._grpc
+        max_explorer_iters = self._max_explorer_iters
+        max_worker_iters = self._max_worker_iters
+        verbose = self._verbose
         
-        fs = FirestoreClient(self._context)
+        def run_explorer(app_name: str, instructions: str = "") -> Dict[str, Any]:
+            """Run Explorer to learn an application and create skill maps."""
+            from agents.explorer.autonomous_explorer import HybridExplorer
+            
+            instr_dict = {}
+            if instructions:
+                try:
+                    instr_dict = json.loads(instructions)
+                except:
+                    instr_dict = {"objective": instructions}
+            
+            print(f"[Orchestrator] Running Explorer on: {app_name}")
+            explorer = HybridExplorer(
+                context, grpc,
+                max_explore_iterations=max_explorer_iters,
+                max_verify_iterations=10,
+                verbose=verbose,
+            )
+            result = explorer.explore(app_name, instr_dict, skip_verify=True)
+            
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Explorer result: {result.status.value}\n{result.final_response[:500]}"
+                }]
+            }
+        
+        def run_worker(task: str, app_name: str = "") -> Dict[str, Any]:
+            """Run Worker to execute a specific task."""
+            from agents.worker.autonomous_worker import AutonomousWorker
+            
+            print(f"[Orchestrator] Running Worker for: {task[:50]}...")
+            config = AgentConfig(max_iterations=max_worker_iters, verbose=verbose)
+            worker = AutonomousWorker(context, grpc, config)
+            result = worker.execute(task, app_name)
+            
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Worker result: {result.status.value}\n{result.final_response[:500]}"
+                }]
+            }
         
         def list_skills() -> Dict[str, Any]:
+            """List all available skill maps."""
             try:
+                from storage.firestore_client import FirestoreClient
+                fs = FirestoreClient(context)
                 skills = fs.list_skill_maps()
                 skill_info = [
-                    {"skill_id": sid, "capability": data.get("metadata", {}).get("capability", "")}
+                    {"skill_id": sid[:12], "capability": data.get("metadata", {}).get("capability", "")[:50]}
                     for sid, data in skills.items()
                 ]
-                return {"content": [{"type": "text", "text": json.dumps({"skills": skill_info})}]}
+                return {"content": [{"type": "text", "text": json.dumps({"skills": skill_info}, indent=2)}]}
             except Exception as e:
                 return {"content": [{"type": "text", "text": f"Error: {str(e)}"}], "isError": True}
         
+        # Register tools
+        self._registry.register_tool(
+            name="run_explorer",
+            description="""Run Explorer agent to learn an application and create skill maps.
+Use this when you need to discover capabilities of an app that aren't already known.
+The Explorer will autonomously:
+- Launch and observe the app
+- Identify UI elements and capabilities
+- Create and save skill maps for automation""",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "app_name": {"type": "string", "description": "Application name to explore"},
+                    "instructions": {"type": "string", "description": "Optional JSON instructions for what to explore"}
+                },
+                "required": ["app_name"]
+            },
+            handler=lambda app_name, instructions="": run_explorer(app_name, instructions),
+        )
+        
+        self._registry.register_tool(
+            name="run_worker",
+            description="""Run Worker agent to execute a specific task.
+Use this to perform actions in an application using available skills or direct automation.""",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "Task to execute"},
+                    "app_name": {"type": "string", "description": "Optional application name"}
+                },
+                "required": ["task"]
+            },
+            handler=lambda task, app_name="": run_worker(task, app_name),
+        )
+        
         self._registry.register_tool(
             name="list_skills",
-            description="List all available skill maps",
+            description="List all available skill maps that have been created by Explorer.",
             input_schema={"type": "object", "properties": {}},
             handler=lambda: list_skills(),
         )
@@ -318,94 +180,64 @@ class HybridOrchestrator:
         additional_instructions: str = "",
     ) -> AgentResult:
         """
-        Run orchestration with LangGraph Plan/Execute + ReAct Verify.
+        Run autonomous orchestration.
+        
+        The LLM agent will:
+        1. Understand the goal
+        2. Check available skills (list_skills)
+        3. Run Explorer to learn apps if needed (run_explorer)
+        4. Run Worker to execute tasks (run_worker)
+        5. Use vision (get_screenshot) to monitor progress
+        6. Continue until goal is achieved
+        
+        Args:
+            goal: High-level goal to achieve
+            additional_instructions: Optional extra instructions
+            
+        Returns:
+            AgentResult with orchestration outcome
         """
         run_id = uuid.uuid4().hex[:8]
         
-        # =====================================================
-        # PHASES 1-2: LangGraph Flow (Plan → Execute)
-        # =====================================================
-        self._log("=== LANGGRAPH FLOW: PLAN → EXECUTE ===")
+        self._log("=== AUTONOMOUS ORCHESTRATION ===")
+        self._log(f"Goal: {goal}")
         
-        initial_state: OrchestratorState = {
-            "run_id": run_id,
-            "goal": goal,
-            "additional_instructions": additional_instructions,
-            "plan": None,
-            "sub_tasks": [],
-            "current_task_index": 0,
-            "task_results": [],
-            "actions_log": [],
-            "verification_result": None,
-            "status": "running",
-            "error": None,
-        }
+        # Create the orchestration task
+        task = get_orchestrator_task(
+            goal=goal,
+            user_id=self._context.user_id,
+            app_id=self._context.app_id,
+            additional_instructions=additional_instructions,
+        )
         
-        try:
-            final_state = self._graph.invoke(initial_state)
-            
-            if final_state.get("error"):
-                return AgentResult(
-                    status=AgentStatus.FAILED,
-                    final_response="",
-                    iterations=0,
-                    error=final_state["error"],
-                )
-            
-            actions_log = final_state.get("actions_log", [])
-            
-        except Exception as e:
-            self._log(f"LangGraph flow failed: {e}")
-            return AgentResult(
-                status=AgentStatus.FAILED,
-                final_response="",
-                iterations=0,
-                error=str(e),
-            )
-        
-        # =====================================================
-        # PHASE 3: ReAct Verification
-        # =====================================================
-        self._log("=== PHASE 3: REACT VERIFICATION ===")
-        
-        verifier = ReActVerifier(
-            tool_registry=self._registry,
-            system_prompt=ORCHESTRATOR_VERIFY_PROMPT,
-            max_iterations=self._max_verify_iters,
+        # Create the orchestration agent
+        config = AgentConfig(
+            max_iterations=self._max_iterations,
             verbose=self._verbose,
+            thread_id=f"orchestrate_{run_id}",
         )
         
-        verify_task = get_orchestrator_verify_task(goal, "\n".join(actions_log))
-        verify_result = verifier.verify(
-            verification_task=verify_task,
-            thread_id=f"orch_verify_{run_id}",
+        agent = AutonomousAgent(
+            tool_registry=self._registry,
+            system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
+            config=config,
         )
         
-        if verify_result.success:
-            self._log("Goal verification PASSED")
-            return AgentResult(
-                status=AgentStatus.COMPLETED,
-                final_response=f"Goal achieved: {verify_result.feedback}",
-                iterations=verify_result.iterations,
-                tool_calls=[],
-            )
-        else:
-            self._log(f"Goal verification INCOMPLETE: {verify_result.feedback[:100]}")
-            return AgentResult(
-                status=AgentStatus.COMPLETED,
-                final_response=f"Goal partially completed: {verify_result.feedback}",
-                iterations=verify_result.iterations,
-                tool_calls=[],
-            )
+        # Run the orchestration
+        self._log(f"Starting with max {self._max_iterations} iterations")
+        result = agent.run(task)
+        
+        self._log(f"Orchestration complete: {result.status.value}")
+        return result
 
 
 # Backward compatibility
-AutonomousOrchestrator = HybridOrchestrator
+HybridOrchestrator = AutonomousOrchestrator
 
 
 def build_autonomous_orchestrator(
     context: CascadeContext,
     grpc_client: CascadeGrpcClient,
-) -> HybridOrchestrator:
+) -> AutonomousOrchestrator:
     """Factory function to build orchestrator."""
-    return HybridOrchestrator(context, grpc_client)
+    return AutonomousOrchestrator(context, grpc_client)

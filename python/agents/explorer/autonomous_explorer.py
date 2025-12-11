@@ -1,12 +1,10 @@
-"""Autonomous Explorer: LangGraph-based exploration agent."""
+"""Autonomous Explorer: LLM-driven exploration using tools and vision."""
 
 from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Dict, List, Optional, TypedDict
-
-from langgraph.graph import StateGraph, END
+from typing import Any, Dict, List, Optional
 
 from cascade_client.auth.context import CascadeContext
 from cascade_client.grpc_client import CascadeGrpcClient
@@ -16,339 +14,118 @@ from mcp_server.body_tools import register_body_tools
 from mcp_server.explorer_tools import register_explorer_tools
 
 from agents.core.autonomous_agent import (
-    AgentConfig, AgentResult, AgentStatus, ReActVerifier
+    AgentConfig, AgentResult, AgentStatus, AutonomousAgent, ReActVerifier
 )
 from agents.core.verify_prompts import EXPLORER_VERIFY_PROMPT, get_explorer_verify_task
-from .prompts_autonomous import EXPLORER_SYSTEM_PROMPT
+from .prompts_autonomous import EXPLORER_SYSTEM_PROMPT, get_explorer_task
 from .skill_map import SkillMap, SkillMetadata, SkillStep
-from .api_discovery import ApiDiscovery
-from .observer import Observer
 
-
-# ============================================================
-# State Definition
-# ============================================================
-
-class ExplorerState(TypedDict, total=False):
-    """State for the Explorer LangGraph."""
-    # Input
-    run_id: str
-    app_name: str
-    instructions: Dict[str, Any]
-    
-    # Discovery phase
-    tasks: List[Dict[str, Any]]
-    existing_skills: Dict[str, Any]
-    missing_capabilities: List[Dict[str, Any]]
-    discovered_apis: List[Dict[str, Any]]
-    
-    # Observation phase
-    ui_elements: List[Dict[str, Any]]
-    app_launched: bool
-    
-    # Generation phase
-    steps: List[SkillStep]
-    skill_map: Optional[SkillMap]
-    
-    # Verification phase
-    verification_result: Optional[Dict[str, Any]]
-    
-    # Final
-    status: str
-    error: Optional[str]
-
-
-# ============================================================
-# Node Functions
-# ============================================================
-
-def node_discover(state: ExplorerState, context: CascadeContext) -> ExplorerState:
-    """Discovery phase: Parse instructions and find missing capabilities."""
-    instructions = state.get("instructions", {})
-    
-    # Extract tasks from instructions - handle multiple formats
-    tasks = []
-    
-    # Format 1: coverage dict with categories (e.g., basic, memory, scientific)
-    if "coverage" in instructions:
-        for category, items in instructions["coverage"].items():
-            if isinstance(items, list):
-                for item in items:
-                    tasks.append({"name": item, "category": category})
-    
-    # Format 2: coverage_data list
-    elif "coverage_data" in instructions:
-        for item in instructions["coverage_data"]:
-            tasks.append({
-                "name": item.get("capability", item.get("name", "")),
-                "constraints": item.get("constraints", []),
-                "expected_outputs": item.get("expected_outputs", []),
-            })
-    
-    # Format 3: tasks list
-    elif "tasks" in instructions:
-        for task in instructions["tasks"]:
-            tasks.append(task if isinstance(task, dict) else {"name": task})
-    
-    print(f"[Explorer] Discovered {len(tasks)} tasks/capabilities")
-    
-    # Get existing skills
-    existing = {}
-    try:
-        from storage.firestore_client import FirestoreClient
-        fs = FirestoreClient(context)
-        existing = fs.list_skill_maps()
-    except Exception as e:
-        print(f"[Explorer] Could not list skill maps: {e}")
-    
-    print(f"[Explorer] Found {len(existing)} existing skills")
-    
-    # Find missing capabilities
-    existing_caps = set()
-    for skill_data in existing.values():
-        if "metadata" in skill_data:
-            cap = skill_data["metadata"].get("capability", "")
-            existing_caps.add(cap.lower())
-    
-    missing = [t for t in tasks if t.get("name", "").lower() not in existing_caps]
-    print(f"[Explorer] Missing capabilities: {len(missing)}")
-    
-    return {
-        **state,
-        "tasks": tasks,
-        "existing_skills": existing,
-        "missing_capabilities": missing,
-    }
-
-
-def node_discover_apis(state: ExplorerState) -> ExplorerState:
-    """Discover APIs for the application."""
-    app_name = state.get("app_name", "")
-    
-    print(f"[Explorer] Discovering APIs for: {app_name}")
-    api_discovery = ApiDiscovery()
-    apis = api_discovery.discover_via_web(app_name)
-    print(f"[Explorer] Found {len(apis)} APIs")
-    
-    return {**state, "discovered_apis": apis}
-
-
-def node_launch_app(state: ExplorerState, grpc_client: CascadeGrpcClient) -> ExplorerState:
-    """Launch the target application."""
-    app_name = state.get("app_name", "")
-    
-    print(f"[Explorer] Launching: {app_name}")
-    try:
-        status = grpc_client.start_app(app_name)
-        print(f"[Explorer] Launch result: {status.success}, message: {status.message}")
-        
-        import time
-        print("[Explorer] Waiting for app to stabilize...")
-        time.sleep(3)
-        
-        return {**state, "app_launched": status.success}
-    except Exception as e:
-        print(f"[Explorer] Launch warning: {e}")
-        return {**state, "app_launched": False}
-
-
-def node_observe(state: ExplorerState, grpc_client: CascadeGrpcClient) -> ExplorerState:
-    """Observe the UI and get semantic tree."""
-    print("[Explorer] Observing UI...")
-    
-    observer = Observer(grpc_client)
-    semantic_tree = observer.fetch_semantic_tree()
-    ui_elements = getattr(semantic_tree, 'elements', []) if semantic_tree else []
-    
-    print(f"[Explorer] Got semantic tree with {len(ui_elements)} elements")
-    return {**state, "ui_elements": ui_elements}
-
-
-def node_generate_skills(state: ExplorerState, context: CascadeContext) -> ExplorerState:
-    """Generate skill map from observations."""
-    missing = state.get("missing_capabilities", [])
-    ui_elements = state.get("ui_elements", [])
-    app_name = state.get("app_name", "")
-    
-    print(f"[Explorer] Generating steps for {len(missing)} capabilities")
-    
-    steps = []
-    for i, task in enumerate(missing):
-        name = task.get("name", f"task_{i}")
-        
-        # Try to find matching UI element (ui_elements are SemanticTreeElement objects)
-        matching_element = None
-        for elem in ui_elements:
-            elem_name = (getattr(elem, 'name', '') or '').lower()
-            if name.lower() in elem_name or elem_name in name.lower():
-                matching_element = elem
-                break
-        
-        if matching_element:
-            # Create proper Selector object
-            from cascade_client.models import Selector, PlatformSource
-            selector = Selector(
-                platform_source=getattr(matching_element, 'platform_source', PlatformSource.PLATFORM_SOURCE_UNSPECIFIED),
-                path=[getattr(matching_element, 'id', '')],
-                name=getattr(matching_element, 'name', ''),
-                control_type=getattr(matching_element, 'control_type', ''),
-            )
-            steps.append(SkillStep(
-                action="Click",
-                selector=selector,
-                step_description=f"Execute: {name}",
-            ))
-        else:
-            # No matching element - skip or create placeholder
-            steps.append(SkillStep(
-                action="Click",
-                step_description=f"TODO: Find element for {name}",
-            ))
-    
-    print(f"[Explorer] Generated {len(steps)} steps")
-    
-    # Create skill map with required fields
-    app_id = context.app_id
-    user_id = context.user_id
-    
-    skill_map = SkillMap(
-        metadata=SkillMetadata(
-            skill_id=str(uuid.uuid4()),
-            app_id=app_id,
-            user_id=user_id,
-            capability=", ".join(t.get("name", "unknown") for t in missing[:3]),
-            description=f"Automation skills for {app_name}",
-        ),
-        steps=steps,
-    )
-    print(f"[Explorer] Skill map created: {skill_map.metadata.skill_id}")
-    
-    return {**state, "steps": steps, "skill_map": skill_map}
-
-
-def node_save_skill(state: ExplorerState, context: CascadeContext) -> ExplorerState:
-    """Save skill map to Firestore."""
-    skill_map = state.get("skill_map")
-    if not skill_map:
-        return state
-    
-    try:
-        from storage.firestore_client import FirestoreClient
-        fs = FirestoreClient(context)
-        fs.upsert_skill_map(skill_map)
-        print(f"[Explorer] Skill map saved to Firestore")
-    except Exception as e:
-        print(f"[Explorer] Could not save skill map: {e}")
-        return {**state, "error": str(e)}
-    
-    return state
-
-
-def should_continue_to_verify(state: ExplorerState) -> str:
-    """Decide whether to continue to verification or end early."""
-    if not state.get("missing_capabilities"):
-        return "end_early"
-    if not state.get("skill_map"):
-        return "end_early"
-    return "verify"
-
-
-# ============================================================
-# Graph Builder
-# ============================================================
-
-def build_explorer_graph(
-    context: CascadeContext,
-    grpc_client: CascadeGrpcClient,
-) -> StateGraph:
-    """Build the LangGraph for autonomous exploration."""
-    
-    graph = StateGraph(ExplorerState)
-    
-    # Add nodes with bound dependencies
-    graph.add_node("discover", lambda s: node_discover(s, context))
-    graph.add_node("discover_apis", node_discover_apis)
-    graph.add_node("launch_app", lambda s: node_launch_app(s, grpc_client))
-    graph.add_node("observe", lambda s: node_observe(s, grpc_client))
-    graph.add_node("generate_skills", lambda s: node_generate_skills(s, context))
-    graph.add_node("save_skill", lambda s: node_save_skill(s, context))
-    
-    # Define flow
-    graph.set_entry_point("discover")
-    graph.add_edge("discover", "discover_apis")
-    graph.add_edge("discover_apis", "launch_app")
-    graph.add_edge("launch_app", "observe")
-    graph.add_edge("observe", "generate_skills")
-    graph.add_edge("generate_skills", "save_skill")
-    graph.add_conditional_edges(
-        "save_skill",
-        should_continue_to_verify,
-        {"verify": END, "end_early": END}  # Verification handled externally
-    )
-    
-    return graph.compile()
-
-
-# ============================================================
-# HybridExplorer Class
-# ============================================================
 
 class HybridExplorer:
     """
-    Autonomous Explorer using LangGraph for Plan/Execute and ReAct for Verify.
+    Autonomous Explorer that uses LLM-driven exploration with tools and vision.
     
-    The agent:
-    1. Discovers capabilities from instructions (LangGraph)
-    2. Launches and observes the target application (LangGraph)
-    3. Generates skill maps based on UI elements (LangGraph)
-    4. Verifies the generated skills work correctly (ReAct)
+    Architecture:
+    - Exploration: Pure agentic loop where LLM uses tools to explore
+      - get_semantic_tree() - See the UI structure
+      - get_screenshot() - See the app visually
+      - click_element(), type_text() - Interact with UI
+      - web_search() - Look up documentation
+      - save_skill_map() - Save discovered skills
+    - Verification: ReAct loop to test the generated skills
+    
+    The LLM does ALL the reasoning about what elements do and how to map them
+    to capabilities. No hardcoded rules or synonym matching.
     """
 
     def __init__(
         self,
         context: CascadeContext,
         grpc_client: CascadeGrpcClient,
+        max_explore_iterations: int = 50,
         max_verify_iterations: int = 10,
         verbose: bool = True,
     ):
         self._context = context
         self._grpc = grpc_client
+        self._max_explore_iterations = max_explore_iterations
         self._max_verify_iterations = max_verify_iterations
         self._verbose = verbose
         
-        # Build LangGraph
-        self._graph = build_explorer_graph(context, grpc_client)
-        
-        # Setup tool registry for verification phase
+        # Setup tool registry with all available tools
         self._registry = ToolRegistry()
         register_body_tools(self._registry, grpc_client)
         register_explorer_tools(self._registry)
         self._add_skill_tools()
 
     def _add_skill_tools(self) -> None:
-        """Add skill saving tool for verification phase."""
+        """Add skill map saving tool for the explorer agent."""
         from storage.firestore_client import FirestoreClient
+        
         fs = FirestoreClient(self._context)
+        context = self._context  # Capture for closure
         
         def save_skill_map(skill_map_json: str) -> Dict[str, Any]:
+            """Save a skill map to Firestore."""
             try:
                 skill_data = json.loads(skill_map_json)
+                
+                # Ensure required metadata fields
+                if "metadata" in skill_data:
+                    skill_data["metadata"]["app_id"] = skill_data["metadata"].get("app_id", context.app_id)
+                    skill_data["metadata"]["user_id"] = skill_data["metadata"].get("user_id", context.user_id)
+                    if "skill_id" not in skill_data["metadata"]:
+                        skill_data["metadata"]["skill_id"] = str(uuid.uuid4())
+                
                 skill_map = SkillMap.model_validate(skill_data)
                 fs.upsert_skill_map(skill_map)
-                return {"content": [{"type": "text", "text": f"Saved skill: {skill_map.metadata.skill_id}"}]}
+                return {
+                    "content": [{
+                        "type": "text", 
+                        "text": f"Successfully saved skill map: {skill_map.metadata.skill_id}"
+                    }]
+                }
             except Exception as e:
-                return {"content": [{"type": "text", "text": f"Error: {str(e)}"}], "isError": True}
+                return {
+                    "content": [{"type": "text", "text": f"Error saving skill map: {str(e)}"}],
+                    "isError": True
+                }
         
         self._registry.register_tool(
             name="save_skill_map",
-            description="Save a skill map to storage",
-            input_schema={"type": "object", "properties": {"skill_map_json": {"type": "string"}}, "required": ["skill_map_json"]},
+            description="""Save a skill map to storage. The skill_map_json should be a JSON string with this format:
+{
+  "metadata": {
+    "skill_id": "optional-id",
+    "app_id": "application-name",
+    "user_id": "user-id",
+    "capability": "what this skill does",
+    "description": "detailed description"
+  },
+  "steps": [
+    {
+      "action": "Click",
+      "step_description": "what this step does",
+      "selector": {
+        "platform_source": "WINDOWS",
+        "name": "Button Name",
+        "control_type": "BUTTON",
+        "path": ["element-id"]
+      }
+    }
+  ]
+}""",
+            input_schema={
+                "type": "object",
+                "properties": {"skill_map_json": {"type": "string", "description": "JSON string of the skill map"}},
+                "required": ["skill_map_json"]
+            },
             handler=lambda skill_map_json: save_skill_map(skill_map_json),
         )
 
     def _log(self, msg: str) -> None:
         if self._verbose:
-            print(f"[HybridExplorer] {msg}")
+            print(f"[Explorer] {msg}")
 
     def explore(
         self,
@@ -358,69 +135,77 @@ class HybridExplorer:
         skip_verify: bool = False,
     ) -> AgentResult:
         """
-        Run autonomous exploration using LangGraph + ReAct verification.
+        Run autonomous exploration.
+        
+        The LLM agent will:
+        1. Launch the app (if needed)
+        2. Use get_semantic_tree() and get_screenshot() to observe
+        3. Reason about what each element does
+        4. Click/interact with elements to test them
+        5. Build skill maps based on its understanding
+        6. Save skill maps when it's discovered capabilities
+        7. Continue until it has explored all requested coverage areas
+        
+        Args:
+            app_name: Application to explore
+            instructions: Optional instructions dict with coverage areas
+            run_id: Optional run identifier
+            skip_verify: Skip verification phase
+            
+        Returns:
+            AgentResult with exploration outcome
         """
         run_id = run_id or uuid.uuid4().hex[:8]
         
         # =====================================================
-        # PHASES 1-3: LangGraph Flow (Discover → Execute → Generate)
+        # PHASE 1: AGENTIC EXPLORATION
         # =====================================================
-        self._log("=== PHASE 1-3: LANGGRAPH FLOW ===")
+        self._log("=== PHASE 1: AGENTIC EXPLORATION ===")
+        self._log("LLM will use tools to explore the application")
         
-        initial_state: ExplorerState = {
-            "run_id": run_id,
-            "app_name": app_name,
-            "instructions": instructions or {},
-            "tasks": [],
-            "existing_skills": {},
-            "missing_capabilities": [],
-            "discovered_apis": [],
-            "ui_elements": [],
-            "app_launched": False,
-            "steps": [],
-            "skill_map": None,
-            "verification_result": None,
-            "status": "running",
-            "error": None,
-        }
+        # Create the exploration task
+        task = get_explorer_task(app_name, instructions or {})
         
-        try:
-            final_state = self._graph.invoke(initial_state)
-            skill_map = final_state.get("skill_map")
-            
-            if not skill_map:
-                self._log("No skill map generated")
-                return AgentResult(
-                    status=AgentStatus.COMPLETED,
-                    final_response="Exploration complete but no new skills discovered",
-                    iterations=0,
-                    tool_calls=[],
-                )
-            
-            self._log(f"Generated skill map: {skill_map.metadata.skill_id}")
-            
-        except Exception as e:
-            self._log(f"LangGraph flow failed: {e}")
-            return AgentResult(
-                status=AgentStatus.FAILED,
-                final_response="",
-                iterations=0,
-                error=str(e),
-            )
+        # Create the exploration agent
+        config = AgentConfig(
+            max_iterations=self._max_explore_iterations,
+            verbose=self._verbose,
+            thread_id=f"explore_{run_id}",
+        )
+        
+        explorer_agent = AutonomousAgent(
+            tool_registry=self._registry,
+            system_prompt=EXPLORER_SYSTEM_PROMPT,
+            config=config,
+        )
+        
+        # Run the exploration
+        self._log(f"Starting exploration with max {self._max_explore_iterations} iterations")
+        explore_result = explorer_agent.run(task)
+        
+        self._log(f"Exploration complete: {explore_result.status.value}")
+        self._log(f"Tool calls: {len(explore_result.tool_calls)}")
+        
+        if explore_result.status == AgentStatus.FAILED:
+            return explore_result
         
         if skip_verify:
             self._log("Skipping verification phase")
-            return AgentResult(
-                status=AgentStatus.COMPLETED,
-                final_response=f"Skill map created: {skill_map.metadata.skill_id}",
-                iterations=0,
-                tool_calls=[],
-            )
+            return explore_result
         
         # =====================================================
-        # PHASE 4: ReAct Verification
+        # PHASE 2: VERIFICATION (optional)
         # =====================================================
-        self._log("=== PHASE 4: REACT VERIFICATION ===")
+        self._log("=== PHASE 2: VERIFICATION ===")
+        
+        # Get the skill maps that were saved during exploration
+        skill_ids = self._get_recent_skill_ids(explore_result)
+        
+        if not skill_ids:
+            self._log("No skill maps found to verify")
+            return explore_result
+        
+        self._log(f"Verifying {len(skill_ids)} skill maps")
         
         verifier = ReActVerifier(
             tool_registry=self._registry,
@@ -429,45 +214,76 @@ class HybridExplorer:
             verbose=self._verbose,
         )
         
-        skill_summary = self._build_skill_summary(skill_map)
-        verify_task = get_explorer_verify_task(skill_summary, app_name)
+        # Verify each skill
+        for skill_id in skill_ids:
+            skill_summary = self._get_skill_summary(skill_id)
+            if skill_summary:
+                verify_task = get_explorer_verify_task(skill_summary, app_name)
+                verify_result = verifier.verify(
+                    verification_task=verify_task,
+                    context={"skill_id": skill_id},
+                    thread_id=f"verify_{run_id}_{skill_id[:8]}",
+                )
+                
+                if verify_result.success:
+                    self._log(f"Skill {skill_id[:8]}... verified")
+                else:
+                    self._log(f"Skill {skill_id[:8]}... needs work: {verify_result.feedback[:50]}...")
         
-        verify_result = verifier.verify(
-            verification_task=verify_task,
-            context={"skill_id": skill_map.metadata.skill_id},
-            thread_id=f"verify_{run_id}",
+        return AgentResult(
+            status=AgentStatus.COMPLETED,
+            final_response=explore_result.final_response,
+            iterations=explore_result.iterations,
+            tool_calls=explore_result.tool_calls,
+            elapsed_seconds=explore_result.elapsed_seconds,
         )
-        
-        if verify_result.success:
-            self._log("Verification PASSED")
-            return AgentResult(
-                status=AgentStatus.COMPLETED,
-                final_response=f"Skill verified: {skill_map.metadata.skill_id}\n{verify_result.feedback}",
-                iterations=verify_result.iterations,
-                tool_calls=[],
-            )
-        else:
-            self._log(f"Verification FAILED: {verify_result.feedback[:100]}...")
-            return AgentResult(
-                status=AgentStatus.COMPLETED,
-                final_response=f"Skill created but verification found issues: {verify_result.feedback}",
-                iterations=verify_result.iterations,
-                tool_calls=[],
-            )
 
-    def _build_skill_summary(self, skill_map: SkillMap) -> str:
-        """Build a text summary of the skill map for verification."""
-        lines = [
-            f"Skill ID: {skill_map.metadata.skill_id}",
-            f"Capability: {skill_map.metadata.capability or 'N/A'}",
-            f"Description: {skill_map.metadata.description or 'N/A'}",
-            f"Steps ({len(skill_map.steps)}):",
-        ]
-        for i, step in enumerate(skill_map.steps, 1):
-            action = getattr(step, 'action', 'unknown')
-            selector = getattr(step, 'selector', None)
-            lines.append(f"  {i}. {action}: {selector}")
-        return "\n".join(lines)
+    def _get_recent_skill_ids(self, result: AgentResult) -> List[str]:
+        """Extract skill IDs from tool calls in the result."""
+        skill_ids = []
+        for tc in result.tool_calls:
+            if tc.get("name") == "save_skill_map":
+                args = tc.get("arguments", {})
+                if "skill_map_json" in args:
+                    try:
+                        data = json.loads(args["skill_map_json"])
+                        if "metadata" in data and "skill_id" in data["metadata"]:
+                            skill_ids.append(data["metadata"]["skill_id"])
+                    except:
+                        pass
+        return skill_ids
+
+    def _get_skill_summary(self, skill_id: str) -> Optional[str]:
+        """Get a summary of a skill map from Firestore."""
+        try:
+            from storage.firestore_client import FirestoreClient
+            fs = FirestoreClient(self._context)
+            skill_data = fs.get_skill_map(skill_id)
+            
+            if not skill_data:
+                return None
+            
+            meta = skill_data.get("metadata", {})
+            steps = skill_data.get("steps", [])
+            
+            lines = [
+                f"Skill ID: {skill_id}",
+                f"Capability: {meta.get('capability', 'N/A')}",
+                f"Description: {meta.get('description', 'N/A')}",
+                f"Steps ({len(steps)}):",
+            ]
+            for i, step in enumerate(steps[:10], 1):  # Limit to first 10
+                action = step.get('action', 'unknown')
+                desc = step.get('step_description', '')
+                lines.append(f"  {i}. {action}: {desc}")
+            
+            if len(steps) > 10:
+                lines.append(f"  ... and {len(steps) - 10} more steps")
+            
+            return "\n".join(lines)
+        except Exception as e:
+            self._log(f"Could not get skill summary: {e}")
+            return None
 
 
 # Backward compatibility alias

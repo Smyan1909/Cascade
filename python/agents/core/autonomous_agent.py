@@ -63,46 +63,191 @@ class VerificationResult:
 
 def _convert_mcp_tools_to_langchain(registry: ToolRegistry) -> List[StructuredTool]:
     """Convert MCP tool registry to LangChain StructuredTools."""
+    from pydantic import BaseModel, Field, create_model
+    
     tools = []
     
     for tool_schema in registry.list_tools():
         name = tool_schema["name"]
         description = tool_schema["description"]
+        input_schema = tool_schema.get("inputSchema", {})
         handler = registry.get_tool(name)
         
         if handler is None:
             continue
         
+        # Build Pydantic model from input schema for LangChain
+        properties = input_schema.get("properties", {})
+        required = input_schema.get("required", [])
+        
+        field_definitions = {}
+        for prop_name, prop_info in properties.items():
+            prop_type = prop_info.get("type", "string")
+            prop_desc = prop_info.get("description", "")
+            
+            # Map JSON schema types to Python types
+            type_map = {"string": str, "integer": int, "number": float, "boolean": bool, "object": dict, "array": list}
+            python_type = type_map.get(prop_type, str)
+            
+            # Make optional fields have default None
+            if prop_name in required:
+                field_definitions[prop_name] = (python_type, Field(description=prop_desc))
+            else:
+                field_definitions[prop_name] = (Optional[python_type], Field(default=None, description=prop_desc))
+        
+        # Create dynamic Pydantic model for this tool's arguments
+        if field_definitions:
+            ArgsModel = create_model(f"{name}_args", **field_definitions)
+        else:
+            ArgsModel = None
+        
         def make_tool_func(tool_name: str, tool_handler: Callable):
             def tool_func(**kwargs) -> str:
                 try:
-                    result = tool_handler(**kwargs)
+                    # Filter out None values for optional params
+                    filtered_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+                    result = tool_handler(**filtered_kwargs)
                     if isinstance(result, dict) and "content" in result:
                         texts = []
                         for item in result["content"]:
                             if item.get("type") == "text":
                                 texts.append(item.get("text", ""))
-                        return "\n".join(texts) if texts else str(result)
-                    return str(result)
+                        output = "\n".join(texts) if texts else str(result)
+                    else:
+                        output = str(result)
+                    
+                    # Summarize large outputs to prevent context overflow
+                    if len(output) > 5000:
+                        output = _summarize_tool_output(tool_name, output)
+                    
+                    return output
                 except Exception as e:
-                    return f"Error: {str(e)}"
+                    return f"Error calling {tool_name}: {str(e)}"
             return tool_func
         
-        tool = StructuredTool.from_function(
-            func=make_tool_func(name, handler),
-            name=name,
-            description=description,
-        )
+        # Create the tool with or without args schema
+        if ArgsModel:
+            tool = StructuredTool.from_function(
+                func=make_tool_func(name, handler),
+                name=name,
+                description=description,
+                args_schema=ArgsModel,
+            )
+        else:
+            tool = StructuredTool.from_function(
+                func=make_tool_func(name, handler),
+                name=name,
+                description=description,
+            )
         tools.append(tool)
     
     return tools
+
+
+def _summarize_tool_output(tool_name: str, output: str) -> str:
+    """
+    Use LLM to summarize large tool outputs while preserving key information.
+    
+    This prevents context overflow while maintaining semantic meaning.
+    For UI elements, extracts structured info about interactive elements.
+    """
+    # Fast path: if output is mostly JSON, extract key structure
+    if tool_name == "get_semantic_tree":
+        return _summarize_semantic_tree(output)
+    elif tool_name == "get_screenshot":
+        return _summarize_screenshot(output)
+    elif tool_name == "web_search":
+        return _summarize_search_results(output)
+    
+    # Default: use LLM to summarize
+    try:
+        model = _get_langchain_model(temperature=0.0)
+        prompt = f"""Summarize this tool output concisely while preserving ALL actionable information:
+
+Tool: {tool_name}
+Output:
+{output[:10000]}
+
+Create a structured summary with:
+1. Key findings/data
+2. Actionable items (buttons, inputs, elements found)
+3. Any errors or issues
+
+Be concise but complete. Format as bullet points."""
+        
+        response = model.invoke(prompt)
+        return f"[Summarized {tool_name} output]\n{response.content}"
+    except Exception as e:
+        # Fallback: just return first and last parts
+        return f"[Large output from {tool_name}]\n{output[:2000]}\n...[truncated]...\n{output[-1000:]}"
+
+
+def _summarize_semantic_tree(output: str) -> str:
+    """Extract key interactive elements from semantic tree without losing button/control info."""
+    import json
+    
+    try:
+        # Try to parse as JSON first
+        data = json.loads(output) if output.startswith('{') else None
+        if data:
+            elements = data.get("elements", [])
+            summary_lines = [f"[Semantic Tree: {len(elements)} elements]"]
+            
+            # Group by control type
+            buttons = []
+            inputs = []
+            other = []
+            
+            for elem in elements[:100]:  # Limit to first 100
+                name = elem.get("name", "")
+                control_type = elem.get("control_type", "")
+                automation_id = elem.get("automation_id", "")
+                
+                info = f"{name}" + (f" [{automation_id}]" if automation_id else "")
+                
+                if "button" in control_type.lower():
+                    buttons.append(info)
+                elif "edit" in control_type.lower() or "input" in control_type.lower():
+                    inputs.append(info)
+                elif name:  # Only include named elements
+                    other.append(f"{info} ({control_type})")
+            
+            if buttons:
+                summary_lines.append(f"\nButtons ({len(buttons)}): {', '.join(buttons[:30])}")
+            if inputs:
+                summary_lines.append(f"\nInputs ({len(inputs)}): {', '.join(inputs[:10])}")
+            if other:
+                summary_lines.append(f"\nOther controls ({len(other)}): {', '.join(other[:20])}")
+            
+            return "\n".join(summary_lines)
+    except:
+        pass
+    
+    # Fallback for non-JSON or parse errors
+    return f"[Semantic Tree]\n{output[:3000]}..."
+
+
+def _summarize_screenshot(output: str) -> str:
+    """Summarize screenshot data - keep element labels visible."""
+    # Screenshots might be base64 encoded or have markers
+    if len(output) > 10000:
+        return f"[Screenshot captured - {len(output)} chars of image data]\nUse get_semantic_tree() for element details."
+    return output
+
+
+def _summarize_search_results(output: str) -> str:
+    """Summarize web search results to key points."""
+    if len(output) > 5000:
+        # Keep first 3000 chars which likely has the key results
+        return f"[Web Search Results]\n{output[:3000]}\n...[additional results truncated]..."
+    return output
 
 
 def _get_langchain_model(temperature: float = 0.2):
     """Get a LangChain chat model from environment."""
     import os
     provider = os.getenv("CASCADE_MODEL_PROVIDER", "openai").lower()
-    model_name = os.getenv("CASCADE_MODEL_NAME", "gpt-5.2")
+    model_name = os.getenv("CASCADE_MODEL_NAME", "gpt-4o")
     api_key = os.getenv("CASCADE_MODEL_API_KEY")
     
     if provider == "openai":
@@ -210,9 +355,17 @@ class ReActVerifier:
                 if iterations >= self._max_iterations:
                     break
             
-            # Determine success based on final response
-            success = any(word in final_response.lower() for word in 
-                         ["success", "verified", "working", "complete", "passed"])
+            # Determine success based on final response - be strict!
+            # Check for explicit failure indicators FIRST
+            failure_indicators = ["unable", "cannot", "failed", "error", "not working", 
+                                  "issue", "problem", "invalid", "missing", "None"]
+            has_failure = any(word in final_response.lower() for word in failure_indicators)
+            
+            # Only count as success if success words present AND no failure indicators
+            success_indicators = ["verified", "all steps work", "successfully tested"]
+            has_success = any(word in final_response.lower() for word in success_indicators)
+            
+            success = has_success and not has_failure
             
             self._log(f"Verification complete: {'SUCCESS' if success else 'NEEDS WORK'}")
             
