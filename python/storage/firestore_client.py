@@ -82,6 +82,10 @@ class FirestoreClient:
     def upsert_skill_map(self, skill_map: Any) -> None:
         self.upsert_document(self.skill_map_path(skill_map.metadata.skill_id), skill_map.to_firestore())
 
+    def get_skill_map(self, skill_id: str) -> Optional[Dict[str, Any]]:
+        """Get a skill map by ID."""
+        return self.get_document(self.skill_map_path(skill_id))
+
     def save_checkpoint(self, path: str, state: Dict[str, Any]) -> None:
         self.upsert_document(path, state)
 

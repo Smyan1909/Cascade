@@ -39,6 +39,12 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
     private Application? _app;
     private int? _processId;
 
+    // Cached window for fast subsequent lookups (especially for UWP apps)
+    private AutomationElement? _cachedWindow;
+    private string? _currentAppName;
+    private DateTime _cacheExpiry = DateTime.MinValue;
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
+
     public UIA3AutomationProvider(IOptions<UIA3Options> options, ILogger<UIA3AutomationProvider> logger, OcrService ocr)
     {
         _automation = new UIA3Automation();
@@ -57,7 +63,26 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
 
             // Normalize to an executable name for attach.
             var exeName = Path.GetFileNameWithoutExtension(appName);
-            
+
+            // Clear cached window when starting a new app
+            _cachedWindow = null;
+            _cacheExpiry = DateTime.MinValue;
+
+            // Set the app name for window search (map exe names to window titles)
+            if (string.Equals(exeName, "calc", StringComparison.OrdinalIgnoreCase))
+            {
+                _currentAppName = "Calculator";
+            }
+            else if (string.Equals(exeName, "notepad", StringComparison.OrdinalIgnoreCase))
+            {
+                _currentAppName = "Notepad";
+            }
+            else
+            {
+                _currentAppName = exeName;
+            }
+            Console.WriteLine($"[DIAG] Set _currentAppName to '{_currentAppName}'");
+
             // Handle UWP apps where process name differs from executable name
             // e.g., calc.exe launches CalculatorApp process
             string? actualProcessName = null;
@@ -68,7 +93,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
 
             // If already running, try attach first to avoid multiple instances.
             var existing = FindProcessByName(exeName, actualProcessName);
-            
+
             if (existing != null)
             {
                 _logger.LogInformation("Attaching to existing process {Pid} ({Exe})", existing.Id, exeName);
@@ -93,7 +118,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                 _app = Application.Launch(appName);
                 _processId = _app.ProcessId;
                 Console.WriteLine($"[DIAG] Launched app, ProcessId={_processId}");
-                
+
                 // Check if process still exists (it might have exited quickly if app was already running)
                 try
                 {
@@ -119,7 +144,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                             // For non-UWP apps, just check for existing instance
                             existingProc = FindProcessByName(exeName, actualProcessName);
                         }
-                        
+
                         if (existingProc != null)
                         {
                             Console.WriteLine($"[DIAG] Attaching to existing/actual process {existingProc.Id}");
@@ -155,7 +180,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                             _processId = actualProc.Id;
                         }
                     }
-                    
+
                     // If still not found, try to attach to any existing instance
                     if (_app == null)
                     {
@@ -169,7 +194,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                         }
                     }
                 }
-                
+
                 // Wait for main window handle with timeout
                 bool handleReady = false;
                 try
@@ -191,7 +216,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                         handleReady = _app.WaitWhileMainHandleIsMissing(TimeSpan.FromMilliseconds(_options.ActionTimeoutMs));
                     }
                 }
-                
+
                 // Now actively wait until we can actually get the window via UIA
                 var deadline = DateTime.UtcNow.AddMilliseconds(_options.ActionTimeoutMs);
                 AutomationElement? window = null;
@@ -211,13 +236,13 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                     {
                         Console.WriteLine($"[DIAG] GetMainWindow failed during startup wait: {ex.Message}");
                     }
-                    
+
                     if (window == null)
                     {
                         await Task.Delay(500, cancellationToken).ConfigureAwait(false);
                     }
                 }
-                
+
                 if (window == null)
                 {
                     _logger.LogWarning("Could not get main window after launch, but continuing - it may appear later");
@@ -258,7 +283,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                                 // Window not ready yet, continue waiting
                             }
                         }
-                        
+
                         if (_app == null)
                         {
                             // Final attach attempt - window might not be ready but process exists
@@ -277,10 +302,10 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                     throw new InvalidOperationException($"Could not launch {appName} using either Application.Launch or Process.Start: {fallbackEx.Message}", fallbackEx);
                 }
             }
-            
+
             // Give the window a moment to fully initialize
             await Task.Delay(1000, cancellationToken).ConfigureAwait(false);
-            
+
             return new StatusProto { Success = true, Message = $"Launched {appName}" };
         }
         catch (Exception ex)
@@ -308,19 +333,19 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
             var msg1 = $"GetSemanticTreeAsync: root window found, ControlType={rootType}, Name={rootName}";
             Console.WriteLine($"[DIAG] {msg1}");
             _logger.LogInformation(msg1);
-            
+
             var rect = root.BoundingRectangle;
             var msg2 = $"Root bounding rect: Left={rect.Left}, Top={rect.Top}, Width={rect.Width}, Height={rect.Height}, IsEmpty={rect.IsEmpty}";
             Console.WriteLine($"[DIAG] {msg2}");
             _logger.LogInformation(msg2);
-            
+
             var elements = new List<UIElement>();
             await TraverseAsync(root, 0, elements, cancellationToken).ConfigureAwait(false);
-            
+
             var msg3 = $"GetSemanticTreeAsync: traversed {elements.Count} elements";
             Console.WriteLine($"[DIAG] {msg3}");
             _logger.LogInformation(msg3);
-            
+
             return new SemanticTree { Elements = { elements } };
         }
         catch (Exception ex)
@@ -347,7 +372,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
             Console.WriteLine("[DIAG] PerformActionAsync: Element not found");
             return new StatusProto { Success = false, Message = "Element not found" };
         }
-        
+
         Console.WriteLine($"[DIAG] PerformActionAsync: Found element, ControlType={target.ControlType}, Name={target.Name}, performing action {action.ActionType}");
 
         try
@@ -419,137 +444,100 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
             return null;
         }
 
-        Console.WriteLine($"[DIAG] GetRootWindowAsync: _app is not null, _processId={_processId}, MainWindowHandle={_app.MainWindowHandle}");
-
-        // Retry getting the main window with exponential backoff
-        var maxAttempts = 5;
-        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        // Fast path: check if we have a valid cached window
+        if (_cachedWindow != null && DateTime.UtcNow < _cacheExpiry)
         {
             try
             {
-                var timeout = TimeSpan.FromMilliseconds(Math.Min(5000, _options.ActionTimeoutMs / (maxAttempts - attempt)));
-                Console.WriteLine($"[DIAG] Attempt {attempt + 1}/{maxAttempts}: calling GetMainWindow with timeout {timeout.TotalMilliseconds}ms");
-                var window = _app.GetMainWindow(_automation, timeout);
+                // Quick validation - check if window still exists and is visible
+                if (!_cachedWindow.BoundingRectangle.IsEmpty)
+                {
+                    Console.WriteLine($"[DIAG] Using cached window: Name='{_cachedWindow.Name}'");
+                    return _cachedWindow;
+                }
+            }
+            catch
+            {
+                // Window no longer valid, clear cache
+                Console.WriteLine("[DIAG] Cached window no longer valid, clearing cache");
+            }
+            _cachedWindow = null;
+        }
+
+        Console.WriteLine($"[DIAG] GetRootWindowAsync: _processId={_processId}, MainWindowHandle={_app.MainWindowHandle}");
+
+        // For UWP apps (MainWindowHandle is 0), skip the slow GetMainWindow retries
+        // and go directly to name-based search which actually works
+        bool isLikelyUwp = _app.MainWindowHandle == IntPtr.Zero;
+
+        if (!isLikelyUwp)
+        {
+            // Try GetMainWindow for regular Win32 apps (usually works on first try)
+            try
+            {
+                Console.WriteLine($"[DIAG] Trying GetMainWindow for Win32 app");
+                var window = _app.GetMainWindow(_automation, TimeSpan.FromMilliseconds(2000));
                 if (window != null && !window.BoundingRectangle.IsEmpty)
                 {
-                    Console.WriteLine($"[DIAG] Successfully got main window on attempt {attempt + 1}");
-                    _logger.LogDebug("Successfully got main window on attempt {Attempt}", attempt + 1);
+                    Console.WriteLine($"[DIAG] Got main window: Name='{window.Name}'");
+                    CacheWindow(window);
                     return window;
-                }
-                
-                if (window == null)
-                {
-                    Console.WriteLine($"[DIAG] GetMainWindow returned null on attempt {attempt + 1}");
-                    _logger.LogDebug("GetMainWindow returned null on attempt {Attempt}, waiting before retry", attempt + 1);
-                }
-                else if (window.BoundingRectangle.IsEmpty)
-                {
-                    Console.WriteLine($"[DIAG] Main window has empty bounding rectangle on attempt {attempt + 1}");
-                    _logger.LogDebug("Main window has empty bounding rectangle on attempt {Attempt}, waiting before retry", attempt + 1);
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DIAG] Exception on attempt {attempt + 1}: {ex.Message}");
-                _logger.LogDebug(ex, "Failed to get main window on attempt {Attempt}", attempt + 1);
-            }
-
-            if (attempt < maxAttempts - 1)
-            {
-                await Task.Delay(500 * (attempt + 1), cancellationToken).ConfigureAwait(false);
+                Console.WriteLine($"[DIAG] GetMainWindow failed: {ex.Message}");
             }
         }
 
-        // Last resort: try to find window by process ID from desktop
-        if (_processId.HasValue)
-        {
-            try
-            {
-                Console.WriteLine($"[DIAG] Trying desktop search by process ID {_processId.Value}");
-                var desktop = _automation.GetDesktop();
-                var cf = new ConditionFactory(new UIA3PropertyLibrary());
-                var windows = desktop.FindAllChildren(cf.ByProcessId(_processId.Value));
-                Console.WriteLine($"[DIAG] Desktop search found {windows.Length} windows for process {_processId.Value}");
-                
-                // Try to find a window with non-empty bounding rectangle
-                var window = windows.FirstOrDefault(w => !w.BoundingRectangle.IsEmpty);
-                
-                // If no window found, try filtering by ControlType.Window
-                if (window == null)
-                {
-                    Console.WriteLine("[DIAG] No window with non-empty bounding rectangle, trying to find Window control type");
-                    window = windows.FirstOrDefault(w => w.ControlType == FlaUI.Core.Definitions.ControlType.Window);
-                }
-                
-                // If still not found, try finding by name containing "Calculator"
-                if (window == null)
-                {
-                    Console.WriteLine("[DIAG] Trying to find window by name containing 'Calculator'");
-                    foreach (var w in windows)
-                    {
-                        try
-                        {
-                            var name = w.Name ?? string.Empty;
-                            if (name.Contains("Calculator", StringComparison.OrdinalIgnoreCase))
-                            {
-                                window = w;
-                                Console.WriteLine($"[DIAG] Found window by name: '{name}'");
-                                break;
-                            }
-                        }
-                        catch { }
-                    }
-                }
-                
-                // Last resort: just take the first window if available
-                if (window == null && windows.Length > 0)
-                {
-                    Console.WriteLine($"[DIAG] Using first available window (of {windows.Length})");
-                    window = windows[0];
-                }
-                
-                if (window != null)
-                {
-                    Console.WriteLine($"[DIAG] Found window via desktop search: Name='{window.Name}', ControlType={window.ControlType}, Rect.IsEmpty={window.BoundingRectangle.IsEmpty}");
-                    _logger.LogDebug("Found window by process ID from desktop");
-                    return window;
-                }
-                else
-                {
-                    Console.WriteLine("[DIAG] No suitable window found in desktop search");
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[DIAG] Exception in desktop search: {ex.Message}");
-                _logger.LogDebug(ex, "Failed to find window by process ID from desktop");
-            }
-        }
-
-        // For UWP apps, try searching by window name as last resort
+        // For UWP apps or if GetMainWindow failed, use name-based desktop search
+        // This is much faster than retrying GetMainWindow multiple times
         try
         {
-            Console.WriteLine("[DIAG] Trying to find window by name search (for UWP apps)");
+            Console.WriteLine("[DIAG] Searching for window by name (UWP/fallback path)");
             var desktop = _automation.GetDesktop();
             var cf = new ConditionFactory(new UIA3PropertyLibrary());
-            
-            // Try to find Calculator window by name
+
+            // Find all windows in desktop
             var allWindows = desktop.FindAllDescendants(cf.ByControlType(FlaUI.Core.Definitions.ControlType.Window));
-            Console.WriteLine($"[DIAG] Found {allWindows.Length} total windows in desktop");
-            
+            Console.WriteLine($"[DIAG] Found {allWindows.Length} windows in desktop");
+
+            // Determine search name based on current app
+            string searchName = _currentAppName ?? "Calculator";
+
             foreach (var win in allWindows)
             {
                 try
                 {
                     var name = win.Name ?? string.Empty;
-                    if (name.Contains("Calculator", StringComparison.OrdinalIgnoreCase) && !win.BoundingRectangle.IsEmpty)
+                    if (name.Contains(searchName, StringComparison.OrdinalIgnoreCase) && !win.BoundingRectangle.IsEmpty)
                     {
-                        Console.WriteLine($"[DIAG] Found Calculator window by name search: '{name}'");
-                        _logger.LogDebug("Found Calculator window by name search");
+                        Console.WriteLine($"[DIAG] Found window by name search: '{name}'");
+                        CacheWindow(win);
                         return win;
                     }
                 }
                 catch { }
+            }
+
+            // If exact name didn't match, try common app names
+            string[] commonNames = { "Calculator", "Notepad", "Microsoft Edge", "Chrome", "Firefox" };
+            foreach (var commonName in commonNames)
+            {
+                foreach (var win in allWindows)
+                {
+                    try
+                    {
+                        var name = win.Name ?? string.Empty;
+                        if (name.Contains(commonName, StringComparison.OrdinalIgnoreCase) && !win.BoundingRectangle.IsEmpty)
+                        {
+                            Console.WriteLine($"[DIAG] Found window by common name: '{name}'");
+                            CacheWindow(win);
+                            return win;
+                        }
+                    }
+                    catch { }
+                }
             }
         }
         catch (Exception ex)
@@ -558,9 +546,16 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
             _logger.LogDebug(ex, "Failed name-based window search");
         }
 
-        Console.WriteLine($"[DIAG] Failed to get main window after {maxAttempts} attempts and all fallback searches");
-        _logger.LogWarning("Failed to get main window after {Attempts} attempts and all fallback searches", maxAttempts);
+        Console.WriteLine("[DIAG] Failed to find window");
+        _logger.LogWarning("Failed to get main window");
         return null;
+    }
+
+    private void CacheWindow(AutomationElement window)
+    {
+        _cachedWindow = window;
+        _cacheExpiry = DateTime.UtcNow.Add(CacheDuration);
+        Console.WriteLine($"[DIAG] Cached window: Name='{window.Name}', expires in {CacheDuration.TotalMinutes} minutes");
     }
 
     private async Task TraverseAsync(AutomationElement element, int depth, List<UIElement> output, CancellationToken cancellationToken)
@@ -604,7 +599,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
             _logger.LogWarning(ex, "Failed to find children at depth {Depth}", depth);
             return;
         }
-        
+
         foreach (var child in children)
         {
             try
@@ -733,14 +728,14 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
 
         var candidates = current.FindAllDescendants();
         Console.WriteLine($"[DIAG] FindElementAsync: Found {candidates.Length} candidate descendants");
-        
+
         // Debug: show control types present (including Edit/Document if looking for Input)
         if (selector.ControlType == Cascade.Proto.ControlType.Input)
         {
-            var editLike = candidates.Where(e => 
+            var editLike = candidates.Where(e =>
             {
                 var ct = e.ControlType;
-                return ct == FlaUI.Core.Definitions.ControlType.Edit || 
+                return ct == FlaUI.Core.Definitions.ControlType.Edit ||
                        ct == FlaUI.Core.Definitions.ControlType.Document ||
                        ct == FlaUI.Core.Definitions.ControlType.Text;
             }).Take(5).ToList();
@@ -754,14 +749,14 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                 Console.WriteLine($"[DIAG]     ControlType={e.ControlType}, Name={name ?? "null"}, AutomationId={autoId ?? "null"}");
             }
         }
-        
+
         var controlTypes = candidates.Select(e => e.ControlType).Distinct().Take(15).ToList();
         foreach (var ct in controlTypes)
         {
             var mapped = MapControlType(ct);
             Console.WriteLine($"[DIAG]   ControlType in tree: {ct} (mapped to {mapped})");
         }
-        
+
         // Convert to list to avoid multiple enumerations and ensure we can count properly
         var candidatesList = candidates.ToList();
         Console.WriteLine($"[DIAG] Initial candidates count: {candidatesList.Count}");
@@ -804,7 +799,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                 {
                     var mapped = MapControlType(e.ControlType);
                     bool typeMatches = mapped == selector.ControlType;
-                    
+
                     // Special case: Input can match Edit, Document, or Text control types
                     if (!typeMatches && selector.ControlType == Cascade.Proto.ControlType.Input)
                     {
@@ -812,7 +807,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                                      e.ControlType == FlaUI.Core.Definitions.ControlType.Document ||
                                      e.ControlType == FlaUI.Core.Definitions.ControlType.Text;
                     }
-                    
+
                     if (!typeMatches)
                         return false;
                 }
@@ -824,7 +819,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
 
             return true;
         }).ToList();
-        
+
         Console.WriteLine($"[DIAG] After all filters: {candidatesList.Count} -> {filtered.Count}");
         // Debug: show some matching elements
         foreach (var match in filtered.Take(3))
@@ -837,11 +832,11 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
         }
 
         var list = filtered;
-        
+
         // If we have multiple matches and are looking for Input, prioritize Edit/Document over Text
         if (list.Count > 1 && selector.ControlType == Cascade.Proto.ControlType.Input)
         {
-            var prioritized = list.Where(e => 
+            var prioritized = list.Where(e =>
                 e.ControlType == FlaUI.Core.Definitions.ControlType.Edit ||
                 e.ControlType == FlaUI.Core.Definitions.ControlType.Document).ToList();
             if (prioritized.Count > 0)
@@ -850,11 +845,11 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                 list = prioritized;
             }
         }
-        
+
         if (list.Count == 0)
         {
             Console.WriteLine("[DIAG] FindElementAsync: No elements matched all filters");
-            
+
             // Fallback: if looking for Input and no matches, try to find any Edit/Document/Text element
             if (selector.ControlType == Cascade.Proto.ControlType.Input)
             {
@@ -872,10 +867,33 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                     return Task.FromResult<AutomationElement?>(fallback);
                 }
             }
-            
+
+            // NEW: Fallback for name-based search ignoring ControlType
+            // This handles cases where LLM sends wrong control type (e.g., Button instead of ListItem)
+            if (!string.IsNullOrWhiteSpace(selector.Name) && selector.ControlType != Cascade.Proto.ControlType.Unspecified)
+            {
+                Console.WriteLine($"[DIAG] FindElementAsync: Trying name-only fallback for '{selector.Name}'");
+                var nameOnlyMatch = candidatesList.FirstOrDefault(e =>
+                {
+                    try
+                    {
+                        return string.Equals(e.Name, selector.Name, StringComparison.OrdinalIgnoreCase);
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                });
+                if (nameOnlyMatch != null)
+                {
+                    Console.WriteLine($"[DIAG] FindElementAsync: Found name-only match: ControlType={nameOnlyMatch.ControlType}, Name={nameOnlyMatch.Name ?? "null"}");
+                    return Task.FromResult<AutomationElement?>(nameOnlyMatch);
+                }
+            }
+
             return Task.FromResult<AutomationElement?>(null);
         }
-        
+
         Console.WriteLine($"[DIAG] FindElementAsync: {list.Count} elements matched, selecting index {selector.Index}");
 
         var index = selector.Index;
@@ -888,7 +906,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
         try { selName = selected.Name; } catch { }
         try { selAutoId = selected.AutomationId; } catch { }
         Console.WriteLine($"[DIAG] FindElementAsync: Selected element at index {index}: ControlType={selected.ControlType}, Name={selName ?? "null"}, AutomationId={selAutoId ?? "null"}");
-        
+
         return Task.FromResult<AutomationElement?>(selected);
     }
 

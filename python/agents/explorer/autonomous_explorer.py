@@ -11,7 +11,7 @@ from cascade_client.grpc_client import CascadeGrpcClient
 
 from mcp_server.tool_registry import ToolRegistry
 from mcp_server.body_tools import register_body_tools
-from mcp_server.explorer_tools import register_explorer_tools
+# NOTE: explorer_tools imported lazily in __init__ to avoid circular import
 
 from agents.core.autonomous_agent import (
     AgentConfig, AgentResult, AgentStatus, AutonomousAgent, ReActVerifier
@@ -42,8 +42,8 @@ class HybridExplorer:
         self,
         context: CascadeContext,
         grpc_client: CascadeGrpcClient,
-        max_explore_iterations: int = 50,
-        max_verify_iterations: int = 10,
+        max_explore_iterations: int = 500,  # High limit - agent decides when done
+        max_verify_iterations: int = 25,    # More time for thorough verification
         verbose: bool = True,
     ):
         self._context = context
@@ -55,6 +55,9 @@ class HybridExplorer:
         # Setup tool registry with all available tools
         self._registry = ToolRegistry()
         register_body_tools(self._registry, grpc_client)
+        
+        # Lazy import to avoid circular dependency
+        from mcp_server.explorer_tools import register_explorer_tools
         register_explorer_tools(self._registry)
         self._add_skill_tools()
 

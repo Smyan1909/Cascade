@@ -31,7 +31,7 @@ class AgentStatus(str, Enum):
 @dataclass
 class AgentConfig:
     """Configuration for autonomous agent."""
-    max_iterations: int = 50
+    max_iterations: int = 500  # High limit - agent should stop by saying it's done
     max_tool_errors: int = 3
     temperature: float = 0.2
     verbose: bool = True
@@ -146,12 +146,10 @@ def _convert_mcp_tools_to_langchain(registry: ToolRegistry) -> List[StructuredTo
 
 def _summarize_tool_output(tool_name: str, output: str) -> str:
     """
-    Use LLM to summarize large tool outputs while preserving key information.
-    
-    This prevents context overflow while maintaining semantic meaning.
-    For UI elements, extracts structured info about interactive elements.
+    Summarize large tool outputs to prevent context overflow.
+    Uses fast string-based methods, NOT LLM calls (which would be slow).
     """
-    # Fast path: if output is mostly JSON, extract key structure
+    # Fast path for known tool types
     if tool_name == "get_semantic_tree":
         return _summarize_semantic_tree(output)
     elif tool_name == "get_screenshot":
@@ -159,27 +157,14 @@ def _summarize_tool_output(tool_name: str, output: str) -> str:
     elif tool_name == "web_search":
         return _summarize_search_results(output)
     
-    # Default: use LLM to summarize
-    try:
-        model = _get_langchain_model(temperature=0.0)
-        prompt = f"""Summarize this tool output concisely while preserving ALL actionable information:
-
-Tool: {tool_name}
-Output:
-{output[:10000]}
-
-Create a structured summary with:
-1. Key findings/data
-2. Actionable items (buttons, inputs, elements found)
-3. Any errors or issues
-
-Be concise but complete. Format as bullet points."""
-        
-        response = model.invoke(prompt)
-        return f"[Summarized {tool_name} output]\n{response.content}"
-    except Exception as e:
-        # Fallback: just return first and last parts
-        return f"[Large output from {tool_name}]\n{output[:2000]}\n...[truncated]...\n{output[-1000:]}"
+    # Default: fast truncation keeping first and last portions
+    # This preserves context without slow LLM calls
+    max_len = 4000
+    if len(output) <= max_len:
+        return output
+    
+    # Keep first 3000 chars and last 500 chars
+    return f"{output[:3000]}\n\n[... {len(output) - 3500} chars truncated ...]\n\n{output[-500:]}"
 
 
 def _summarize_semantic_tree(output: str) -> str:
@@ -446,34 +431,133 @@ class AutonomousAgent:
         iterations = 0
         
         try:
-            initial_state = {"messages": [HumanMessage(content=user_content)]}
+            current_messages = [HumanMessage(content=user_content)]
             
-            for event in self._agent.stream(initial_state, config, stream_mode="values"):
-                iterations += 1
-                messages = event.get("messages", [])
+            # Track which messages we've already seen/logged to avoid duplicates
+            seen_message_ids = set()
+            
+            while iterations < self._config.max_iterations:
+                initial_state = {"messages": current_messages}
+                should_continue = False
                 
-                for msg in messages:
-                    if hasattr(msg, "tool_calls") and msg.tool_calls:
-                        for tc in msg.tool_calls:
-                            tool_name = tc.get("name", "unknown")
-                            tool_args = tc.get("args", {})
-                            all_tool_calls.append({"name": tool_name, "arguments": tool_args})
-                            self._log(f"Tool: {tool_name}({str(tool_args)[:60]}...)")
-                            if self._on_tool_call:
-                                self._on_tool_call(tool_name, tool_args)
+                for event in self._agent.stream(initial_state, config, stream_mode="values"):
+                    iterations += 1
+                    messages = event.get("messages", [])
                     
-                    if hasattr(msg, "content") and msg.content and msg.type == "ai":
-                        if not hasattr(msg, "tool_calls") or not msg.tool_calls:
-                            final_response = msg.content
+                    # Only process NEW messages (not seen before)
+                    for msg in messages:
+                        # Create a unique ID for this message
+                        msg_id = id(msg)
+                        if msg_id in seen_message_ids:
+                            continue  # Skip already-logged messages
+                        seen_message_ids.add(msg_id)
+                        
+                        # Log AI reasoning before tool calls
+                        if hasattr(msg, "content") and msg.type == "ai":
+                            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                                # This is reasoning before tool calls
+                                if msg.content:  # Only log if there's actual reasoning
+                                    self._log(f"\n{'='*50}")
+                                    self._log(f"REASONING (iteration {iterations}):")
+                                    self._log(f"{'='*50}")
+                                    reasoning = msg.content[:1000] if len(msg.content) > 1000 else msg.content
+                                    for line in reasoning.split('\n'):
+                                        self._log(f"  {line}")
+                                    self._log(f"{'='*50}")
+                                
+                                # Log tool calls
+                                for tc in msg.tool_calls:
+                                    tool_name = tc.get("name", "unknown")
+                                    tool_args = tc.get("args", {})
+                                    all_tool_calls.append({"name": tool_name, "arguments": tool_args})
+                                    self._log(f"  → Calling: {tool_name}({str(tool_args)[:100]})")
+                                    if self._on_tool_call:
+                                        self._on_tool_call(tool_name, tool_args)
+                            else:
+                                # Response without tool calls - determine if we should continue or stop
+                                final_response = msg.content
+                                response_lower = final_response.lower() if final_response else ""
+                                
+                                # Detect EXPLICIT completion signals
+                                completion_signals = [
+                                    "all capabilities have been",
+                                    "exploration complete",
+                                    "all skill maps have been",
+                                    "finished creating",
+                                    "completed all",
+                                    "all requested capabilities",
+                                    "task complete",
+                                    "mission complete",
+                                    "successfully mapped all",
+                                ]
+                                is_complete = any(sig in response_lower for sig in completion_signals)
+                                
+                                # Detect REPLAN or unfinished work signals (should continue)
+                                continue_signals = [
+                                    "replan",
+                                    "next step",
+                                    "continue with",
+                                    "moving to",
+                                    "now i will",
+                                    "next i need",
+                                    "need to discover",
+                                    "still need to",
+                                    "remaining capabilities",
+                                ]
+                                wants_to_continue = any(sig in response_lower for sig in continue_signals)
+                                
+                                if is_complete:
+                                    self._log(f"\n{'='*50}")
+                                    self._log("EXPLORATION COMPLETE - Agent signaled completion")
+                                    self._log(f"{'='*50}")
+                                    should_continue = False
+                                elif wants_to_continue:
+                                    self._log(f"\n{'='*50}")
+                                    self._log("CONTINUING - More work to do...")
+                                    self._log(f"{'='*50}")
+                                    should_continue = True
+                                else:
+                                    # Default: if there's no tool call but no explicit completion, assume work remains
+                                    should_continue = True
+                    
+                    if iterations >= self._config.max_iterations:
+                        break
                 
-                if iterations >= self._config.max_iterations:
+                # Continue with a new invocation if not complete
+                if should_continue and iterations < self._config.max_iterations:
+                    # Add the current messages plus a continuation prompt
+                    current_messages = messages + [
+                        HumanMessage(content="Continue with your plan. What's next?")
+                    ]
+                else:
                     break
             
-            self._log(f"Completed: {final_response[:100]}...")
+            # Generate a summary if we have tool calls
+            if all_tool_calls:
+                summary_parts = []
+                summary_parts.append(f"Completed {len(all_tool_calls)} actions in {iterations} iterations.")
+                
+                # Count unique tools used
+                tool_counts = {}
+                for tc in all_tool_calls:
+                    name = tc["name"]
+                    tool_counts[name] = tool_counts.get(name, 0) + 1
+                
+                summary_parts.append(f"Tools used: {', '.join(f'{k}({v})' for k, v in tool_counts.items())}")
+                
+                # Append the final response if it contains useful info
+                if final_response and len(final_response) < 500:
+                    summary_parts.append(f"Status: {final_response[:200]}")
+                
+                summary = "\n".join(summary_parts)
+            else:
+                summary = final_response
+            
+            self._log(f"Completed: {summary[:100]}...")
             
             return AgentResult(
                 status=AgentStatus.COMPLETED if final_response else AgentStatus.MAX_ITERATIONS,
-                final_response=final_response,
+                final_response=summary,
                 iterations=iterations,
                 tool_calls=all_tool_calls,
                 elapsed_seconds=time.time() - start_time,
