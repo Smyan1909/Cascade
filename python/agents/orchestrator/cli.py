@@ -47,6 +47,7 @@ def main():
     parser.add_argument("--max-explorer-iterations", type=int, default=100, help="Maximum Explorer iterations")
     parser.add_argument("--max-worker-iterations", type=int, default=50, help="Maximum Worker iterations")
     parser.add_argument("--quiet", action="store_true", help="Reduce output verbosity")
+    parser.add_argument("--auto-approve", action="store_true", help="Skip plan approval step")
     args = parser.parse_args()
 
     from .autonomous_orchestrator import AutonomousOrchestrator
@@ -66,7 +67,7 @@ def main():
     print()
 
     orchestrator = AutonomousOrchestrator(context, grpc_client, config)
-    result = orchestrator.run(args.goal)
+    result = orchestrator.run(args.goal, auto_approve=args.auto_approve)
 
     print("\n" + "=" * 60)
     print(f"Status: {result.status.value}")

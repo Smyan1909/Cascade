@@ -16,6 +16,7 @@ from mcp_server.body_tools import register_body_tools
 from agents.core.autonomous_agent import (
     AgentConfig, AgentResult, AgentStatus, AutonomousAgent, ReActVerifier
 )
+from agents.core.planning_agent import PlanningAgent, Plan, get_user_plan_approval
 from agents.core.verify_prompts import EXPLORER_VERIFY_PROMPT, get_explorer_verify_task
 from .prompts_autonomous import EXPLORER_SYSTEM_PROMPT, get_explorer_task
 from .skill_map import SkillMap, SkillMetadata, SkillStep
@@ -136,38 +137,84 @@ class HybridExplorer:
         instructions: Optional[Dict[str, Any]] = None,
         run_id: Optional[str] = None,
         skip_verify: bool = False,
+        auto_approve: bool = False,
     ) -> AgentResult:
         """
-        Run autonomous exploration.
+        Run autonomous exploration with Plan-Approve-Execute flow.
         
-        The LLM agent will:
-        1. Launch the app (if needed)
-        2. Use get_semantic_tree() and get_screenshot() to observe
-        3. Reason about what each element does
-        4. Click/interact with elements to test them
-        5. Build skill maps based on its understanding
-        6. Save skill maps when it's discovered capabilities
-        7. Continue until it has explored all requested coverage areas
+        The agent will:
+        1. Create a detailed exploration plan
+        2. Wait for user approval (unless auto_approve=True)
+        3. Execute the approved plan
+        4. Verify the created skills
         
         Args:
             app_name: Application to explore
             instructions: Optional instructions dict with coverage areas
             run_id: Optional run identifier
             skip_verify: Skip verification phase
+            auto_approve: Skip plan approval step
             
         Returns:
             AgentResult with exploration outcome
         """
         run_id = run_id or uuid.uuid4().hex[:8]
         
-        # =====================================================
-        # PHASE 1: AGENTIC EXPLORATION
-        # =====================================================
-        self._log("=== PHASE 1: AGENTIC EXPLORATION ===")
-        self._log("LLM will use tools to explore the application")
+        # Build goal description from instructions
+        goal = f"Explore {app_name} and create skill maps for all capabilities"
+        context = ""
+        if instructions:
+            if "objective" in instructions:
+                goal = instructions["objective"]
+            if "coverage" in instructions:
+                areas = []
+                for category, items in instructions["coverage"].items():
+                    if isinstance(items, list):
+                        areas.extend(items)
+                context = f"Capabilities to discover: {', '.join(areas)}"
         
-        # Create the exploration task
-        task = get_explorer_task(app_name, instructions or {})
+        # =====================================================
+        # PHASE 0: PLANNING (with approval loop)
+        # =====================================================
+        self._log("=== PHASE 0: PLANNING ===")
+        self._log("Creating exploration plan...")
+        
+        planner = PlanningAgent(verbose=self._verbose)
+        plan = planner.create_plan(goal, app_name, context)
+        
+        # Approval loop
+        if not auto_approve:
+            self._log("Waiting for user approval...")
+            approved = False
+            while not approved:
+                approved, feedback = get_user_plan_approval(plan)
+                if not approved:
+                    if feedback == "User rejected the plan" or feedback == "Cancelled by user":
+                        self._log("Plan rejected by user")
+                        return AgentResult(
+                            status=AgentStatus.FAILED,
+                            final_response="Plan rejected by user",
+                            iterations=0,
+                        )
+                    # Refine the plan based on feedback
+                    self._log(f"Refining plan based on feedback: {feedback[:50]}...")
+                    plan = planner.refine_plan(plan, feedback)
+            
+            self._log("Plan approved by user")
+        else:
+            self._log("Auto-approving plan")
+            print("\n" + plan.to_display_string())
+        
+        plan.status = plan.status.APPROVED
+        
+        # =====================================================
+        # PHASE 1: EXECUTION (exploration with approved plan)
+        # =====================================================
+        self._log("=== PHASE 1: EXECUTION ===")
+        self._log("Executing approved plan...")
+        
+        # Create the exploration task with plan context
+        task = plan.to_execution_prompt() + "\n\n" + get_explorer_task(app_name, instructions or {})
         
         # Create the exploration agent
         config = AgentConfig(

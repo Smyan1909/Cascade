@@ -409,6 +409,180 @@ class AutonomousAgent:
         if self._config.verbose:
             print(f"[Agent] {message}")
 
+    def _generate_summary(
+        self, 
+        task: str, 
+        tool_calls: List[Dict[str, Any]], 
+        final_response: str,
+        status: AgentStatus,
+    ) -> str:
+        """Generate an LLM-based summary of execution."""
+        try:
+            # Build tool call summary
+            tool_counts = {}
+            for tc in tool_calls:
+                name = tc.get("name", "unknown")
+                tool_counts[name] = tool_counts.get(name, 0) + 1
+            
+            tool_summary = ", ".join(f"{k} ({v}x)" for k, v in sorted(tool_counts.items()))
+            
+            summary_prompt = f"""Generate a brief, clear summary of what was accomplished.
+
+ORIGINAL TASK: {task[:500]}
+
+TOOLS USED: {tool_summary}
+
+AGENT'S FINAL NOTE: {final_response[:1000] if final_response else 'N/A'}
+
+STATUS: {status.value}
+
+Please provide a summary in this exact format:
+
+## Execution Summary
+
+**Status**: [Completed/Failed/Incomplete]
+
+**What was done**:
+- [Action 1]
+- [Action 2]
+...
+
+**Results**:
+[Key outcomes or results]
+
+**Remaining work** (if any):
+[What still needs to be done, or "None - task complete"]
+"""
+            
+            model = _get_langchain_model(temperature=0.3)
+            response = model.invoke([{"role": "user", "content": summary_prompt}])
+            return response.content
+            
+        except Exception as e:
+            # Fallback to basic summary if LLM fails
+            return f"Execution {status.value}. Tools used: {len(tool_calls)}. {final_response[:200] if final_response else ''}"
+
+    def _build_action_narrative(self, tool_calls: List[Dict[str, Any]]) -> str:
+        """Build a natural language narrative of what actions were taken."""
+        if not tool_calls:
+            return "No actions taken yet."
+        
+        narrative_parts = []
+        for i, tc in enumerate(tool_calls, 1):
+            name = tc.get("name", "unknown")
+            args = tc.get("arguments", {})
+            
+            # Create human-readable descriptions for common tools
+            if name == "start_app":
+                app = args.get("app_name", "app")
+                narrative_parts.append(f"{i}. Launched application: {app}")
+            elif name == "get_semantic_tree":
+                narrative_parts.append(f"{i}. Observed the UI structure")
+            elif name == "get_screenshot":
+                narrative_parts.append(f"{i}. Captured screenshot of current state")
+            elif name == "click_element":
+                selector = args.get("selector", {})
+                elem_name = selector.get("name", "element") if isinstance(selector, dict) else str(selector)
+                narrative_parts.append(f"{i}. Clicked on: {elem_name[:50]}")
+            elif name == "type_text":
+                text = args.get("text", "")[:20]
+                narrative_parts.append(f"{i}. Typed text: '{text}'")
+            elif name == "save_skill_map":
+                narrative_parts.append(f"{i}. Saved a skill map")
+            elif name.startswith("execute_skill_"):
+                skill_id = name.replace("execute_skill_", "")
+                narrative_parts.append(f"{i}. Executed skill: {skill_id}")
+            elif name == "run_explorer":
+                app = args.get("app_name", "app")
+                narrative_parts.append(f"{i}. Ran Explorer on: {app}")
+            elif name == "run_worker":
+                task = args.get("task", "")[:50]
+                narrative_parts.append(f"{i}. Ran Worker task: {task}")
+            else:
+                narrative_parts.append(f"{i}. Called {name}")
+        
+        # Limit to last 20 actions for readability
+        if len(narrative_parts) > 20:
+            narrative_parts = narrative_parts[-20:]
+            narrative_parts.insert(0, f"... (plus {len(tool_calls) - 20} earlier actions)")
+        
+        return "\n".join(narrative_parts)
+
+    def _evaluate_completion(
+        self,
+        task: str,
+        tool_calls: List[Dict[str, Any]],
+        last_response: str,
+        success_criteria: Optional[List[str]] = None,
+    ) -> tuple:
+        """
+        Use LLM to evaluate if task is truly complete.
+        
+        Returns:
+            (status: str, reasoning: str, next_action: str)
+            status is one of: 'COMPLETE', 'INCOMPLETE', 'STUCK'
+        """
+        try:
+            action_narrative = self._build_action_narrative(tool_calls)
+            
+            criteria_text = "\n".join(f"- {c}" for c in success_criteria) if success_criteria else "Not specified"
+            
+            evaluation_prompt = f"""You are evaluating whether an AI agent has completed its task.
+
+ORIGINAL TASK:
+{task[:1000]}
+
+SUCCESS CRITERIA:
+{criteria_text}
+
+ACTIONS TAKEN ({len(tool_calls)} total):
+{action_narrative}
+
+AGENT'S LAST RESPONSE:
+{last_response[:1000] if last_response else 'N/A'}
+
+EVALUATE: Has the agent completed ALL success criteria?
+
+Consider:
+1. Has every success criterion been addressed?
+2. Is the agent stuck in a loop (repeating same actions)?
+3. Does the agent seem blocked or unable to proceed?
+
+Respond in this EXACT format:
+COMPLETION_STATUS: [COMPLETE/INCOMPLETE/STUCK]
+CRITERIA_MET: [list which criteria are satisfied]
+CRITERIA_MISSING: [list which criteria are NOT yet satisfied]
+REASONING: [brief explanation of your assessment]
+NEXT_ACTION: [if incomplete, what should be done next; if complete or stuck, say "None"]
+"""
+            
+            model = _get_langchain_model(temperature=0.1)  # Low temp for consistent evaluation
+            response = model.invoke([{"role": "user", "content": evaluation_prompt}])
+            eval_text = response.content
+            
+            # Parse the response
+            status = "INCOMPLETE"
+            reasoning = eval_text
+            next_action = ""
+            
+            for line in eval_text.split("\n"):
+                line = line.strip()
+                if line.startswith("COMPLETION_STATUS:"):
+                    status_val = line.split(":", 1)[1].strip().upper()
+                    if status_val in ("COMPLETE", "INCOMPLETE", "STUCK"):
+                        status = status_val
+                elif line.startswith("NEXT_ACTION:"):
+                    next_action = line.split(":", 1)[1].strip()
+                elif line.startswith("REASONING:"):
+                    reasoning = line.split(":", 1)[1].strip()
+            
+            return (status, reasoning, next_action)
+            
+        except Exception as e:
+            self._log(f"Evaluation error: {e}")
+            # Default to incomplete if evaluation fails
+            return ("INCOMPLETE", f"Evaluation failed: {e}", "Continue with task")
+
     def run(self, task: str, context: Optional[Dict[str, Any]] = None) -> AgentResult:
         """Run the agent on a task until completion."""
         import json
@@ -429,6 +603,8 @@ class AutonomousAgent:
         all_tool_calls = []
         final_response = ""
         iterations = 0
+        consecutive_no_tools = 0  # Track consecutive responses without tool calls
+        max_consecutive_no_tools = 4  # Stop after this many empty responses
         
         try:
             current_messages = [HumanMessage(content=user_content)]
@@ -437,6 +613,8 @@ class AutonomousAgent:
             seen_message_ids = set()
             
             while iterations < self._config.max_iterations:
+                next_action = None
+
                 initial_state = {"messages": current_messages}
                 should_continue = False
                 
@@ -465,69 +643,109 @@ class AutonomousAgent:
                                         self._log(f"  {line}")
                                     self._log(f"{'='*50}")
                                 
-                                # Log tool calls
+                                # Log tool calls (limit to avoid API errors)
+                                MAX_TOOL_CALLS_PER_ITERATION = 100  # OpenAI limit is 128
+                                tool_calls_this_iteration = 0
+                                
                                 for tc in msg.tool_calls:
+                                    tool_calls_this_iteration += 1
+                                    
+                                    # Prevent exceeding API limits
+                                    if tool_calls_this_iteration > MAX_TOOL_CALLS_PER_ITERATION:
+                                        if tool_calls_this_iteration == MAX_TOOL_CALLS_PER_ITERATION + 1:
+                                            self._log(f"  ⚠ LIMIT: {len(msg.tool_calls)} tool calls exceeds {MAX_TOOL_CALLS_PER_ITERATION} - batching remaining")
+                                        continue  # Skip but don't crash - agent will continue in next iteration
+                                    
                                     tool_name = tc.get("name", "unknown")
                                     tool_args = tc.get("args", {})
                                     all_tool_calls.append({"name": tool_name, "arguments": tool_args})
                                     self._log(f"  → Calling: {tool_name}({str(tool_args)[:100]})")
                                     if self._on_tool_call:
                                         self._on_tool_call(tool_name, tool_args)
+                                    # Reset consecutive no-tool counter when we have tool calls
+                                    consecutive_no_tools = 0
                             else:
-                                # Response without tool calls - determine if we should continue or stop
+                                # Response without tool calls - log the reasoning
+                                consecutive_no_tools += 1
                                 final_response = msg.content
-                                response_lower = final_response.lower() if final_response else ""
                                 
-                                # Detect EXPLICIT completion signals
-                                completion_signals = [
-                                    "all capabilities have been",
-                                    "exploration complete",
-                                    "all skill maps have been",
-                                    "finished creating",
-                                    "completed all",
-                                    "all requested capabilities",
-                                    "task complete",
-                                    "mission complete",
-                                    "successfully mapped all",
-                                ]
-                                is_complete = any(sig in response_lower for sig in completion_signals)
+                                # Log agent's reasoning even without tool calls
+                                if final_response:
+                                    self._log(f"\n{'─'*50}")
+                                    self._log("Agent Reasoning:")
+                                    # Show first 500 chars of reasoning
+                                    reasoning_preview = final_response[:500]
+                                    if len(final_response) > 500:
+                                        reasoning_preview += "..."
+                                    for line in reasoning_preview.split("\n"):
+                                        self._log(f"  {line}")
+                                    self._log(f"{'─'*50}")
                                 
-                                # Detect REPLAN or unfinished work signals (should continue)
-                                continue_signals = [
-                                    "replan",
-                                    "next step",
-                                    "continue with",
-                                    "moving to",
-                                    "now i will",
-                                    "next i need",
-                                    "need to discover",
-                                    "still need to",
-                                    "remaining capabilities",
-                                ]
-                                wants_to_continue = any(sig in response_lower for sig in continue_signals)
+                                # Use LLM to evaluate completion
+                                self._log("Evaluating completion status...")
                                 
-                                if is_complete:
+                                # Extract success criteria from task if available
+                                success_criteria = None
+                                if "SUCCESS CRITERIA:" in task.upper():
+                                    try:
+                                        criteria_section = task.upper().split("SUCCESS CRITERIA:")[1]
+                                        criteria_lines = []
+                                        for line in criteria_section.split("\n"):
+                                            line = line.strip()
+                                            if line.startswith("-") or line.startswith("•"):
+                                                criteria_lines.append(line[1:].strip())
+                                            elif line and not line.startswith("#") and len(criteria_lines) < 10:
+                                                if any(c.isalpha() for c in line):
+                                                    criteria_lines.append(line)
+                                        success_criteria = criteria_lines[:10] if criteria_lines else None
+                                    except:
+                                        pass
+                                
+                                if consecutive_no_tools > 1:
+
+                                    eval_status, eval_reasoning, next_action = self._evaluate_completion(
+                                        task, all_tool_calls, final_response, success_criteria
+                                    )
+                                    
                                     self._log(f"\n{'='*50}")
-                                    self._log("EXPLORATION COMPLETE - Agent signaled completion")
-                                    self._log(f"{'='*50}")
-                                    should_continue = False
-                                elif wants_to_continue:
-                                    self._log(f"\n{'='*50}")
-                                    self._log("CONTINUING - More work to do...")
-                                    self._log(f"{'='*50}")
-                                    should_continue = True
+                                    self._log(f"EVALUATION: {eval_status}")
+                                    self._log(f"Reasoning: {eval_reasoning[:200]}...")
+                                    
+                                    if eval_status == "COMPLETE":
+                                        self._log("✓ All success criteria met!")
+                                        self._log(f"{'='*50}")
+                                        should_continue = False
+                                    elif eval_status == "STUCK":
+                                        self._log("⚠ Agent appears stuck - stopping execution")
+                                        self._log(f"{'='*50}")
+                                        should_continue = False
+                                    else:  # INCOMPLETE
+                                        if consecutive_no_tools >= max_consecutive_no_tools:
+                                            self._log(f"⚠ {consecutive_no_tools} attempts without progress - stopping")
+                                            self._log(f"{'='*50}")
+                                            should_continue = False
+                                        else:
+                                            self._log(f"→ Continuing... (attempt {consecutive_no_tools}/{max_consecutive_no_tools})")
+                                            if next_action:
+                                                self._log(f"Next: {next_action[:100]}")
+                                            self._log(f"{'='*50}")
+                                            should_continue = True
                                 else:
-                                    # Default: if there's no tool call but no explicit completion, assume work remains
                                     should_continue = True
-                    
+
                     if iterations >= self._config.max_iterations:
                         break
                 
                 # Continue with a new invocation if not complete
-                if should_continue and iterations < self._config.max_iterations:
+                if should_continue and iterations < self._config.max_iterations and not next_action:
                     # Add the current messages plus a continuation prompt
                     current_messages = messages + [
-                        HumanMessage(content="Continue with your plan. What's next?")
+                        HumanMessage(content="Continue. Execute your next planned step.")
+                    ]
+                elif should_continue and iterations < self._config.max_iterations and next_action:
+                    # Add the current messages plus a continuation prompt
+                    current_messages = messages + [
+                        HumanMessage(content="Continue. Execute according to the next action plan from the evaluator: " + next_action)
                     ]
                 else:
                     break
@@ -549,15 +767,28 @@ class AutonomousAgent:
                 if final_response and len(final_response) < 500:
                     summary_parts.append(f"Status: {final_response[:200]}")
                 
-                summary = "\n".join(summary_parts)
+                basic_summary = "\n".join(summary_parts)
             else:
-                summary = final_response
+                basic_summary = final_response
             
-            self._log(f"Completed: {summary[:100]}...")
+            # Generate LLM-based execution summary
+            self._log("Generating execution summary...")
+            result_status = AgentStatus.COMPLETED if final_response else AgentStatus.MAX_ITERATIONS
+            llm_summary = self._generate_summary(task, all_tool_calls, final_response, result_status)
+            
+            # Combine summaries
+            full_summary = f"{llm_summary}\n\n---\nRaw stats: {basic_summary}"
+            
+            self._log(f"Completed: {basic_summary[:100]}...")
+            print("\n" + "=" * 60)
+            print("EXECUTION SUMMARY")
+            print("=" * 60)
+            print(llm_summary)
+            print("=" * 60)
             
             return AgentResult(
-                status=AgentStatus.COMPLETED if final_response else AgentStatus.MAX_ITERATIONS,
-                final_response=summary,
+                status=result_status,
+                final_response=full_summary,
                 iterations=iterations,
                 tool_calls=all_tool_calls,
                 elapsed_seconds=time.time() - start_time,

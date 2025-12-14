@@ -919,7 +919,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
         {
             case ActionType.Click:
                 return UiaPatterns.TryInvoke(target) ||
-                       UiaPatterns.TrySelectionItem(target) ||
+                       UiaPatterns.TrySelectionItemWithClick(target) ||
                        UiaPatterns.TryLegacyAccessibleAction(target);
 
             case ActionType.TypeText:

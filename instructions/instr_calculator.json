@@ -1,46 +1,101 @@
 {
-    "objective": "Map every capability of the Windows Calculator app so workers can perform any calculation.",
-    "app_context": "Windows Calculator",
-    "constraints": [
-      "Be nondestructive; do not change system settings",
-      "Prefer stable UI selectors; avoid OCR unless necessary",
-      "Document modes and transitions clearly"
+  "objective": "Map every capability of the Windows Calculator app so workers can perform any calculation.",
+  "app_context": "Windows Calculator",
+  "constraints": [
+    "Be nondestructive; do not change system settings",
+    "Prefer stable UI selectors; avoid OCR unless necessary"
+  ],
+  "expected_outputs": [
+    "skill_map",
+    "selectors",
+    "modes",
+    "operations_coverage"
+  ],
+  "coverage": {
+    "basic": [
+      "add",
+      "subtract",
+      "multiply",
+      "divide",
+      "clear",
+      "decimal",
+      "sign toggle"
     ],
-    "expected_outputs": [
-      "skill_map",
-      "selectors",
-      "modes",
-      "operations_coverage"
+    "memory": [
+      "MC",
+      "MR",
+      "M+",
+      "M-",
+      "MS",
+      "M list",
+      "MC behavior"
     ],
-    "coverage": {
-      "basic": ["add", "subtract", "multiply", "divide", "clear", "decimal", "sign toggle"],
-      "memory": ["MC", "MR", "M+", "M-", "MS", "M list", "MC behavior"],
-      "scientific": [
-        "sin", "cos", "tan", "asin", "acos", "atan",
-        "log", "ln", "sqrt", "square", "x^y", "1/x",
-        "pi", "e", "factorial", "mod", "exp"
-      ],
-      "programmer": ["hex", "dec", "oct", "bin toggles", "bit shifts", "and/or/xor/not"],
-      "date": ["date difference"],
-      "converter": [
-        "currency", "volume", "length", "weight", "temperature", "energy",
-        "area", "speed", "time", "power", "data", "pressure", "angle"
-      ],
-      "history": ["open history", "reuse history item", "clear history"],
-      "settings": ["open settings pane"]
-    },
-    "navigation": {
-      "launch": "Open Calculator app",
-      "mode_switching": "Use navigation menu to switch modes; capture selectors for each mode entry"
-    },
-    "stability_notes": [
-      "Capture selectors for: window, nav menu, mode buttons, keypad buttons, display, memory list, history pane, converter category selector.",
-      "Record any dynamic IDs; prefer role/name-based selectors."
+    "scientific": [
+      "sin",
+      "cos",
+      "tan",
+      "asin",
+      "acos",
+      "atan",
+      "log",
+      "ln",
+      "sqrt",
+      "square",
+      "x^y",
+      "1/x",
+      "pi",
+      "e",
+      "factorial",
+      "mod",
+      "exp"
     ],
-    "expected_outputs_detail": {
-      "skill_map": "One skill per operation family with pre/postconditions and selectors",
-      "selectors": "Stable selectors for all buttons, displays, menus",
-      "modes": "List of modes and how to enter/exit each",
-      "operations_coverage": "List of operations covered and verified"
-    }
+    "programmer": [
+      "hex",
+      "dec",
+      "oct",
+      "bin toggles",
+      "bit shifts",
+      "and/or/xor/not"
+    ],
+    "date": [
+      "date difference"
+    ],
+    "converter": [
+      "currency",
+      "volume",
+      "length",
+      "weight",
+      "temperature",
+      "energy",
+      "area",
+      "speed",
+      "time",
+      "power",
+      "data",
+      "pressure",
+      "angle"
+    ],
+    "history": [
+      "open history",
+      "reuse history item",
+      "clear history"
+    ],
+    "settings": [
+      "open settings pane"
+    ]
+  },
+  "navigation": {
+    "launch": "Open Calculator app",
+    "mode_switching": "Use navigation menu to switch modes; capture selectors for each mode entry"
+  },
+  "stability_notes": [
+    "Capture selectors for: window, nav menu, mode buttons, keypad buttons, display, memory list, history pane, converter category selector.",
+    "Record any dynamic IDs; prefer role/name-based selectors."
+  ],
+  "expected_outputs_detail": {
+    "skill_map": "One skill per operation family with pre/postconditions and selectors",
+    "selectors": "Stable selectors for all buttons, displays, menus",
+    "modes": "List of modes and how to enter/exit each",
+    "operations_coverage": "List of operations covered and verified"
   }
+}

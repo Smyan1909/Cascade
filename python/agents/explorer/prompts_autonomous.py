@@ -69,6 +69,13 @@ For capabilities requiring multiple steps, like navigating to a mode:
 - Primitive: ONE step per skill
 - Composite: MULTIPLE steps in sequence, set skill_type to "composite"
 
+## CRITICAL: Tool Call Limits
+
+**IMPORTANT**: Never call save_skill_map more than 20-30 times in a single response!
+- Work in BATCHES: Explore one category, save its skills, then move to the next
+- Example: First explore and save all "basic" skills, then "scientific", etc.
+- If you try to save 100+ skills at once, the API will reject it
+
 ## Available Tools
 
 ### Observation

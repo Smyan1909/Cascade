@@ -66,6 +66,7 @@ def main():
     parser.add_argument("--instructions-file", help="Path to JSON file with instructions (recommended)")
     parser.add_argument("--grpc-endpoint", help="gRPC endpoint (host:port)")
     parser.add_argument("--max-iterations", type=int, default=100, help="Maximum iterations")
+    parser.add_argument("--auto-approve", action="store_true", help="Skip plan approval step")
     args = parser.parse_args()
 
     # Import here to avoid circular imports
@@ -91,6 +92,7 @@ def main():
         app_name=args.app_name,
         instructions=instructions,
         run_id=args.run_id,
+        auto_approve=args.auto_approve,
     )
     
     print("\n" + "=" * 50)

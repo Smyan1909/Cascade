@@ -16,6 +16,7 @@ from mcp_server.explorer_tools import register_explorer_tools
 from agents.core.autonomous_agent import (
     AgentConfig, AgentResult, AgentStatus, AutonomousAgent
 )
+from agents.core.planning_agent import PlanningAgent, get_user_plan_approval
 from .prompts_autonomous import ORCHESTRATOR_SYSTEM_PROMPT, get_orchestrator_task
 
 
@@ -178,32 +179,69 @@ Use this to perform actions in an application using available skills or direct a
         self,
         goal: str,
         additional_instructions: str = "",
+        auto_approve: bool = False,
     ) -> AgentResult:
         """
-        Run autonomous orchestration.
+        Run autonomous orchestration with Plan-Approve-Execute flow.
         
-        The LLM agent will:
-        1. Understand the goal
-        2. Check available skills (list_skills)
-        3. Run Explorer to learn apps if needed (run_explorer)
-        4. Run Worker to execute tasks (run_worker)
-        5. Use vision (get_screenshot) to monitor progress
-        6. Continue until goal is achieved
+        The agent will:
+        1. Create a detailed orchestration plan
+        2. Wait for user approval (unless auto_approve=True)
+        3. Execute the plan (run Explorer/Worker as needed)
+        4. Report results
         
         Args:
             goal: High-level goal to achieve
             additional_instructions: Optional extra instructions
+            auto_approve: Skip plan approval step
             
         Returns:
             AgentResult with orchestration outcome
         """
         run_id = uuid.uuid4().hex[:8]
         
-        self._log("=== AUTONOMOUS ORCHESTRATION ===")
+        # =====================================================
+        # PHASE 0: PLANNING (with approval loop)
+        # =====================================================
+        self._log("=== PHASE 0: PLANNING ===")
         self._log(f"Goal: {goal}")
+        self._log("Creating orchestration plan...")
         
-        # Create the orchestration task
-        task = get_orchestrator_task(
+        planner = PlanningAgent(verbose=self._verbose)
+        plan = planner.create_plan(goal, app_name="multiple apps", context=additional_instructions)
+        
+        # Approval loop
+        if not auto_approve:
+            self._log("Waiting for user approval...")
+            approved = False
+            while not approved:
+                approved, feedback = get_user_plan_approval(plan)
+                if not approved:
+                    if feedback in ("User rejected the plan", "Cancelled by user"):
+                        self._log("Plan rejected by user")
+                        return AgentResult(
+                            status=AgentStatus.FAILED,
+                            final_response="Plan rejected by user",
+                            iterations=0,
+                        )
+                    self._log(f"Refining plan based on feedback: {feedback[:50]}...")
+                    plan = planner.refine_plan(plan, feedback)
+            
+            self._log("Plan approved by user")
+        else:
+            self._log("Auto-approving plan")
+            print("\n" + plan.to_display_string())
+        
+        plan.status = plan.status.APPROVED
+        
+        # =====================================================
+        # PHASE 1: EXECUTION
+        # =====================================================
+        self._log("=== PHASE 1: EXECUTION ===")
+        self._log("Executing approved plan...")
+        
+        # Create the orchestration task with plan context
+        task = plan.to_execution_prompt() + "\n\n" + get_orchestrator_task(
             goal=goal,
             user_id=self._context.user_id,
             app_id=self._context.app_id,
