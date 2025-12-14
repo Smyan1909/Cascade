@@ -197,7 +197,7 @@ class HybridExplorer:
             return explore_result
         
         # =====================================================
-        # PHASE 2: VERIFICATION (optional)
+        # PHASE 2: VERIFICATION WITH RE-EXPLORATION
         # =====================================================
         self._log("=== PHASE 2: VERIFICATION ===")
         
@@ -217,25 +217,74 @@ class HybridExplorer:
             verbose=self._verbose,
         )
         
-        # Verify each skill
+        max_fix_attempts = 2  # Max re-exploration attempts per skill
+        verified_skills = []
+        failed_skills = []
+        
+        # Verify each skill with re-exploration loop
         for skill_id in skill_ids:
-            skill_summary = self._get_skill_summary(skill_id)
-            if skill_summary:
+            attempts = 0
+            skill_verified = False
+            
+            while attempts <= max_fix_attempts and not skill_verified:
+                skill_summary = self._get_skill_summary(skill_id)
+                if not skill_summary:
+                    self._log(f"Skill {skill_id[:8]}... not found, skipping")
+                    break
+                
+                # Run verification
                 verify_task = get_explorer_verify_task(skill_summary, app_name)
                 verify_result = verifier.verify(
                     verification_task=verify_task,
                     context={"skill_id": skill_id},
-                    thread_id=f"verify_{run_id}_{skill_id[:8]}",
+                    thread_id=f"verify_{run_id}_{skill_id[:8]}_{attempts}",
                 )
                 
                 if verify_result.success:
-                    self._log(f"Skill {skill_id[:8]}... verified")
+                    self._log(f"Skill {skill_id[:8]}... VERIFIED ✓")
+                    verified_skills.append(skill_id)
+                    skill_verified = True
                 else:
-                    self._log(f"Skill {skill_id[:8]}... needs work: {verify_result.feedback[:50]}...")
+                    attempts += 1
+                    self._log(f"Skill {skill_id[:8]}... needs work (attempt {attempts}/{max_fix_attempts})")
+                    self._log(f"  Issues: {verify_result.feedback[:100]}...")
+                    
+                    if attempts <= max_fix_attempts:
+                        # =====================================================
+                        # RE-EXPLORATION: Fix the skill based on feedback
+                        # =====================================================
+                        self._log(f"=== RE-EXPLORING to fix {skill_id[:8]}... ===")
+                        
+                        fix_task = self._create_fix_task(
+                            skill_id, skill_summary, 
+                            verify_result.feedback, app_name
+                        )
+                        
+                        fix_config = AgentConfig(
+                            max_iterations=30,  # Shorter for focused fixes
+                            verbose=self._verbose,
+                            thread_id=f"fix_{run_id}_{skill_id[:8]}_{attempts}",
+                        )
+                        
+                        fix_agent = AutonomousAgent(
+                            tool_registry=self._registry,
+                            system_prompt=EXPLORER_SYSTEM_PROMPT,
+                            config=fix_config,
+                        )
+                        
+                        fix_result = fix_agent.run(fix_task)
+                        self._log(f"Fix attempt complete: {fix_result.status.value}")
+                    else:
+                        self._log(f"Skill {skill_id[:8]}... FAILED after {max_fix_attempts} attempts ✗")
+                        failed_skills.append(skill_id)
+        
+        # Summary
+        self._log(f"=== VERIFICATION COMPLETE ===")
+        self._log(f"Verified: {len(verified_skills)}, Failed: {len(failed_skills)}")
         
         return AgentResult(
-            status=AgentStatus.COMPLETED,
-            final_response=explore_result.final_response,
+            status=AgentStatus.COMPLETED if not failed_skills else AgentStatus.COMPLETED,
+            final_response=f"Verified {len(verified_skills)} skills. Failed: {len(failed_skills)}. " + explore_result.final_response,
             iterations=explore_result.iterations,
             tool_calls=explore_result.tool_calls,
             elapsed_seconds=explore_result.elapsed_seconds,
@@ -288,6 +337,35 @@ class HybridExplorer:
             self._log(f"Could not get skill summary: {e}")
             return None
 
+    def _create_fix_task(
+        self, 
+        skill_id: str, 
+        skill_summary: str, 
+        feedback: str, 
+        app_name: str
+    ) -> str:
+        """Create a targeted task to fix a failed skill."""
+        return f"""## Fix Skill: {skill_id}
+
+Application: **{app_name}**
+
+### Current Skill (NEEDS FIXING)
+{skill_summary}
+
+### Verification Feedback
+{feedback}
+
+### Your Task
+1. Analyze what's wrong with this skill based on the feedback
+2. Re-discover the correct selector(s) for this capability
+3. Test the fix with an end-to-end verification
+4. Save the UPDATED skill map (use the SAME skill_id: {skill_id})
+
+IMPORTANT: 
+- Use get_semantic_tree() to find the correct elements
+- Test the skill works before saving
+- Save with the SAME skill_id to overwrite the broken skill
+"""
 
 # Backward compatibility alias
 AutonomousExplorer = HybridExplorer

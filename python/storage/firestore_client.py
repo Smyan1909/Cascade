@@ -20,8 +20,9 @@ class FirestoreClient:
         
         # Check for emulator first
         import os
-        if os.getenv("FIRESTORE_EMULATOR_HOST"):
-            print("[Firestore] Connecting to Emulator (Direct Client)")
+        emulator_host = os.getenv("FIRESTORE_EMULATOR_HOST")
+        if emulator_host:
+            print(f"[Firestore] Connecting to Emulator at: {emulator_host}")
             try:
                 from google.cloud import firestore
                 from google.auth import credentials as ga_credentials

@@ -74,31 +74,51 @@ class AutonomousWorker:
         tool_name = f"execute_skill_{skill_id}"
         description = skill.metadata.description or skill.metadata.capability or f"Execute {skill_id}"
         
-        def make_handler(skill_map):
+        # Capture grpc_client in closure
+        grpc = self._grpc
+        
+        def make_handler(skill_map, grpc_client):
             def handler() -> Dict[str, Any]:
-                # Execute skill steps
-                results = []
-                for step in skill_map.steps:
-                    action = getattr(step, 'action', 'unknown')
-                    selector = getattr(step, 'selector', None)
-                    results.append(f"{action}: {selector}")
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": json.dumps({
-                            "success": True,
-                            "skill_id": skill_map.metadata.skill_id,
-                            "steps": results,
-                        })
-                    }]
-                }
+                from agents.worker.graph import StepExecutor
+                
+                skill_id = skill_map.metadata.skill_id
+                print(f"[Worker] Executing skill: {skill_id}")
+                print(f"[Worker]   Steps: {len(skill_map.steps)}")
+                
+                try:
+                    executor = StepExecutor(grpc_client, dry_run=False)
+                    statuses = executor.execute_skill(skill_map)
+                    success = all(st.success for st in statuses) if statuses else False
+                    
+                    print(f"[Worker]   Result: {'SUCCESS' if success else 'FAILED'}")
+                    for st in statuses:
+                        print(f"[Worker]     Step {st.step_index}: {st.action} - {st.message}")
+                    
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": json.dumps({
+                                "success": success,
+                                "skill_id": skill_id,
+                                "statuses": [st.model_dump() for st in statuses],
+                            })
+                        }]
+                    }
+                except Exception as e:
+                    import traceback
+                    print(f"[Worker]   ERROR: {e}")
+                    traceback.print_exc()
+                    return {
+                        "content": [{"type": "text", "text": f"Error: {str(e)}"}],
+                        "isError": True,
+                    }
             return handler
         
         self._registry.register_tool(
             name=tool_name,
             description=description,
             input_schema={"type": "object", "properties": {}},
-            handler=make_handler(skill),
+            handler=make_handler(skill, grpc),
         )
 
     def execute(

@@ -9,9 +9,7 @@ from cascade_client.auth.context import CascadeContext
 from cascade_client.grpc_client import CascadeGrpcClient
 
 from agents.explorer.skill_map import SkillMap
-from agents.worker.runtime import WorkerAgent
 from agents.worker.skill_loader import load_all_skills
-from agents.worker.storage import WorkerStorage
 
 
 def register_skill_tools(
@@ -20,7 +18,6 @@ def register_skill_tools(
     grpc_client: CascadeGrpcClient,
 ) -> None:
     """Dynamically register all discovered skills as MCP tools."""
-    storage = WorkerStorage(context)
     skills = load_all_skills(context)
 
     for skill in skills:
@@ -63,19 +60,24 @@ def register_skill_tools(
             description += f"\nPostconditions: {', '.join(skill.metadata.postconditions)}"
 
         # Create handler that executes the skill
-        def make_handler(skill_id: str, storage: WorkerStorage, grpc_client: CascadeGrpcClient):
+        def make_handler(skill_map: SkillMap, grpc_client: CascadeGrpcClient):
             def handler(**kwargs):
                 try:
-                    # Create worker agent and execute skill
-                    worker_agent = WorkerAgent(storage, grpc_client, dry_run=False)
-                    # For now, we'll execute the skill directly via the runtime
-                    # In a full implementation, we'd use the worker's start_run with skill_id
-                    skill_map = storage.load_skill_map(skill_id)
+                    skill_id = skill_map.metadata.skill_id
+                    print(f"[SkillTool] Executing skill: {skill_id}")
+                    print(f"[SkillTool] Steps: {len(skill_map.steps)}")
+                    
                     from agents.worker.graph import StepExecutor
-
                     executor = StepExecutor(grpc_client, dry_run=False)
+                    
+                    # Execute each step
                     statuses = executor.execute_skill(skill_map)
                     success = all(st.success for st in statuses) if statuses else False
+                    
+                    print(f"[SkillTool] Execution complete: success={success}")
+                    for st in statuses:
+                        print(f"[SkillTool]   Step {st.step_index}: {st.action} - {st.message}")
+                    
                     return {
                         "content": [
                             {
@@ -91,6 +93,9 @@ def register_skill_tools(
                         ]
                     }
                 except Exception as e:
+                    import traceback
+                    print(f"[SkillTool] ERROR: {e}")
+                    traceback.print_exc()
                     return {
                         "content": [{"type": "text", "text": f"Error executing skill: {str(e)}"}],
                         "isError": True,
@@ -102,7 +107,7 @@ def register_skill_tools(
             name=tool_name,
             description=description,
             input_schema=input_schema,
-            handler=make_handler(skill_id, storage, grpc_client),
+            handler=make_handler(skill, grpc_client),
         )
 
 

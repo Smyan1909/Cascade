@@ -6,7 +6,29 @@ from typing import Optional
 
 from cascade_client.auth.context import CascadeContext
 from cascade_client.grpc_client import CascadeGrpcClient
+import os 
+from pathlib import Path
 
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).parents[3] / ".env"
+    load_dotenv(env_path)
+    print(f"[CLI] Loaded env from {env_path} (via dotenv)")
+except ImportError:
+    print("[CLI] python-dotenv not found, parsing .env manually...")
+    env_path = Path(__file__).parents[3] / ".env"
+    if env_path.exists():
+        with open(env_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    key = key.strip()
+                    value = value.strip().strip("'").strip('"')
+                    os.environ[key] = value
+        print(f"[CLI] Loaded env from {env_path} (manual parse)")
 
 @dataclass
 class OrchestratorConfig:

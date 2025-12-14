@@ -2,19 +2,40 @@
 
 import argparse
 import uuid
-
+from pathlib import Path
 from cascade_client.auth.context import CascadeContext
 from cascade_client.grpc_client import CascadeGrpcClient
 
+import os 
+
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).parents[3] / ".env"
+    load_dotenv(env_path)
+    print(f"[CLI] Loaded env from {env_path} (via dotenv)")
+except ImportError:
+    print("[CLI] python-dotenv not found, parsing .env manually...")
+    env_path = Path(__file__).parents[3] / ".env"
+    if env_path.exists():
+        with open(env_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    key = key.strip()
+                    value = value.strip().strip("'").strip('"')
+                    os.environ[key] = value
+        print(f"[CLI] Loaded env from {env_path} (manual parse)")
 
 def main():
     parser = argparse.ArgumentParser(description="Run Worker agent (Autonomous)")
     parser.add_argument("--task", required=True, help="Task to execute")
     parser.add_argument("--app-name", help="Application name for context")
-    parser.add_argument("--run-id", default=str(uuid.uuid4()), help="Run identifier")
     parser.add_argument("--skill-id", help="Specific skill ID to use")
     parser.add_argument("--grpc-endpoint", help="gRPC endpoint (host:port)")
-    parser.add_argument("--max-iterations", type=int, default=50, help="Maximum iterations")
+    parser.add_argument("--max-iterations", type=int, default=500, help="Maximum iterations (agent decides when done)")
     args = parser.parse_args()
 
     from .autonomous_worker import AutonomousWorker
@@ -33,7 +54,6 @@ def main():
     result = worker.execute(
         task=args.task,
         app_name=args.app_name,
-        run_id=args.run_id,
     )
     
     print("\n" + "=" * 50)

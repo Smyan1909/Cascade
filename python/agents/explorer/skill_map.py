@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, validator
 from cascade_client.models import ActionType, Selector
 
 PreferredMethod = Literal["api", "ui"]
+SkillType = Literal["primitive", "composite"]
 
 
 class SkillMetadata(BaseModel):
@@ -16,6 +17,19 @@ class SkillMetadata(BaseModel):
     skill_id: str = Field(..., description="Unique skill identifier")
     app_id: str = Field(..., description="Application ID")
     user_id: str = Field(..., description="User ID")
+    
+    # Skill type: primitive (single action) or composite (multi-step sequence)
+    skill_type: SkillType = Field(
+        default="primitive",
+        description="Type of skill: 'primitive' for single actions, 'composite' for multi-step sequences"
+    )
+    
+    # For composite skills: list of skill IDs that must be executed first
+    composed_of: List[str] = Field(
+        default_factory=list,
+        description="For composite skills: list of prerequisite skill IDs to execute in order"
+    )
+    
     description: str = Field(
         default="",
         description="Human-readable description of what the skill does",
@@ -48,7 +62,7 @@ class SkillMetadata(BaseModel):
         default=0.0, ge=0.0, le=1.0, description="Overall confidence score"
     )
     preferred_method: PreferredMethod = Field(
-        default="api", description="Preferred automation method"
+        default="ui", description="Preferred automation method"
     )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
@@ -58,7 +72,6 @@ class SkillMetadata(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc),
         description="Last update timestamp",
     )
-
 
 class ApiEndpoint(BaseModel):
     """API endpoint description for automation."""
