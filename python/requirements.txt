@@ -8,6 +8,25 @@ protobuf>=4.25.0
 # Model validation
 pydantic>=2.5.0
 
+# Agent framework
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-openai>=1.1.2
+
+# Web search + HTTP
+requests>=2.31.0
+tavily-python>=0.3.0  # Optional, used when provider=tavily
+google-search-results>=2.4.2  # Optional, Serper
+
+# LLM providers (optional)
+openai>=1.53.0
+
+# Firestore
+firebase-admin>=6.4.0
+
+# PDF parsing
+pypdf>=4.0.0
+
 # Testing
 pytest>=7.4.0
 pytest-asyncio>=0.21.0

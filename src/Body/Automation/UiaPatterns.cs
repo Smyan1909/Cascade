@@ -11,10 +11,18 @@ public static class UiaPatterns
 {
     public static bool TryInvoke(AutomationElement element)
     {
-        var pattern = element.Patterns.Invoke.PatternOrDefault;
-        if (pattern == null) return false;
-        pattern.Invoke();
-        return true;
+        try
+        {
+            var pattern = element.Patterns.Invoke.PatternOrDefault;
+            if (pattern == null) return false;
+            pattern.Invoke();
+            return true;
+        }
+        catch
+        {
+            // Invoke can throw on certain elements
+            return false;
+        }
     }
 
     public static bool TrySetValue(AutomationElement element, string? text)
@@ -89,7 +97,7 @@ public static class UiaPatterns
         {
             var pattern = element.Patterns.Scroll.PatternOrDefault;
             if (pattern == null) return false;
-            
+
             // If verticalPercent is provided and > 100, treat it as a scroll delta (positive = down, negative = up)
             double v;
             if (verticalPercent.HasValue)
@@ -110,7 +118,7 @@ public static class UiaPatterns
             {
                 v = pattern.VerticalScrollPercent;
             }
-            
+
             var h = horizontalPercent.HasValue ? Math.Clamp(horizontalPercent.Value, 0, 100) : pattern.HorizontalScrollPercent;
             pattern.SetScrollPercent(h, v);
             return true;
@@ -161,12 +169,43 @@ public static class UiaPatterns
         return true;
     }
 
+    /// <summary>
+    /// Selects an item and then clicks it. Use for Click actions on selection items
+    /// like LISTITEM where Select() alone only highlights without invoking.
+    /// </summary>
+    public static bool TrySelectionItemWithClick(AutomationElement element)
+    {
+        var pattern = element.Patterns.SelectionItem.PatternOrDefault;
+        if (pattern == null) return false;
+        pattern.Select();
+        // After selecting, perform a click to actually invoke the item
+        try
+        {
+            element.Click(true);
+            return true;
+        }
+        catch
+        {
+            // If click fails, the selection still succeeded - return true
+            // as the element was at least selected
+            return true;
+        }
+    }
+
     public static bool TryLegacyAccessibleAction(AutomationElement element)
     {
-        var pattern = element.Patterns.LegacyIAccessible.PatternOrDefault;
-        if (pattern == null) return false;
-        pattern.DoDefaultAction();
-        return true;
+        try
+        {
+            var pattern = element.Patterns.LegacyIAccessible.PatternOrDefault;
+            if (pattern == null) return false;
+            pattern.DoDefaultAction();
+            return true;
+        }
+        catch
+        {
+            // DoDefaultAction can throw on elements that don't support it
+            return false;
+        }
     }
 
     public static bool TryExpandForActionType(AutomationElement element, ActionType actionType)

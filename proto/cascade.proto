@@ -132,3 +132,161 @@ enum ImageFormat {
   JPEG = 2;
 }
 
+// Worker agent entry point for executing Skill Maps.
+service WorkerService {
+  // Starts a worker run for the given skill map and streams progress events.
+  rpc StartWorkerRun(WorkerRunRequest) returns (stream WorkerEvent);
+  // Resumes a worker run from a checkpoint and streams progress events.
+  rpc ResumeWorkerRun(WorkerResumeRequest) returns (stream WorkerEvent);
+}
+
+// Agent-to-Agent communication for coordination between agents under the same user/app.
+service AgentCommService {
+  // Registers an agent instance for a user/app context and returns an agent_id.
+  rpc RegisterAgent(AgentRegisterRequest) returns (AgentRegisterResponse);
+  // Sends a message to a specific agent_id or role.
+  rpc SendAgentMessage(AgentMessage) returns (Status);
+  // Streams inbox messages for this agent instance (at-least-once delivery).
+  rpc StreamAgentInbox(AgentInboxRequest) returns (stream AgentEnvelope);
+  // Acknowledge processing of a message to support at-least-once semantics.
+  rpc AckAgentMessage(AgentAck) returns (Status);
+}
+
+message WorkerRunRequest {
+  // High-level task description; used for planning skill selection.
+  string task = 1;
+  // Skill map identifier to execute (loaded from Firestore).
+  string skill_id = 2;
+  // Optional run identifier; generated if empty.
+  string run_id = 3;
+  // User/application/auth context for Firestore scoping.
+  string user_id = 4;
+  string app_id = 5;
+  string auth_token = 6;
+  // Optional inputs for parameterizing the run (opaque to worker).
+  map<string, string> inputs = 7;
+  // Dry-run skips side-effectful actions but still walks the plan.
+  bool dry_run = 8;
+  // Maximum number of replans during execution.
+  int32 max_replans = 9;
+}
+
+message WorkerResumeRequest {
+  // Run identifier to resume (checkpoint is loaded via context).
+  string run_id = 1;
+  string user_id = 2;
+  string app_id = 3;
+  string auth_token = 4;
+}
+
+enum WorkerEventType {
+  WORKER_EVENT_UNSPECIFIED = 0;
+  RUN_STARTED = 1;
+  STEP_STARTED = 2;
+  STEP_COMPLETED = 3;
+  STEP_FAILED = 4;
+  CHECKPOINT_SAVED = 5;
+  RUN_COMPLETED = 6;
+  RUN_FAILED = 7;
+  LOG = 8;
+}
+
+message WorkerEvent {
+  string run_id = 1;
+  string skill_id = 2;
+  WorkerEventType event_type = 3;
+  // Index of the step being processed (if applicable).
+  int32 step_index = 4;
+  // Human-readable summary of the event.
+  string message = 5;
+  // Optional error details when a step fails.
+  string error = 6;
+  // Additional metadata such as step IDs or timing.
+  map<string, string> metadata = 7;
+  // Serialized checkpoint payload (JSON string).
+  string checkpoint = 8;
+  // True when this event is emitted during planning.
+  bool planning_phase = 9;
+  // Skills selected in the current plan.
+  repeated string selected_skills = 10;
+  // Verifier reasoning or summary.
+  string verification_result = 11;
+}
+
+// A2A messages ---------------------------------------------------------------
+
+message AgentDescriptor {
+  // Unique agent instance id (assigned during registration).
+  string agent_id = 1;
+  // Role of the agent (e.g., explorer, worker, orchestrator).
+  string role = 2;
+  // Optional run identifier to scope messages.
+  string run_id = 3;
+}
+
+message AgentRegisterRequest {
+  // User/application/auth context for scoping.
+  string user_id = 1;
+  string app_id = 2;
+  string auth_token = 3;
+  // Optional role and run metadata.
+  string role = 4;
+  string run_id = 5;
+}
+
+message AgentRegisterResponse {
+  // Assigned agent id for this connection.
+  string agent_id = 1;
+}
+
+message AgentMessage {
+  // Message identifier for deduplication/idempotency.
+  string message_id = 1;
+  // User/application scope; must match registration.
+  string user_id = 2;
+  string app_id = 3;
+  // Sender metadata.
+  string sender_agent_id = 4;
+  string sender_role = 5;
+  // Target routing: either direct to agent_id or by role.
+  string target_agent_id = 6;
+  string target_role = 7;
+  // Optional run identifier to scope conversations.
+  string run_id = 8;
+  // Free-form metadata for routing/diagnostics.
+  map<string, string> headers = 9;
+  // Payload serialized as JSON string.
+  string json_payload = 10;
+  // Milliseconds since epoch when created.
+  int64 created_at_ms = 11;
+}
+
+message AgentEnvelope {
+  // The delivered message.
+  AgentMessage message = 1;
+  // Token that must be used to ack this delivery.
+  string ack_token = 2;
+}
+
+message AgentInboxRequest {
+  // Agent requesting its inbox.
+  string agent_id = 1;
+  // User/application scope; must match registration.
+  string user_id = 2;
+  string app_id = 3;
+  // Optional run filter.
+  string run_id = 4;
+  // Optional role assertion for safety.
+  string role = 5;
+}
+
+message AgentAck {
+  // Message and delivery info to mark as processed.
+  string message_id = 1;
+  string ack_token = 2;
+  // Agent acknowledging the message.
+  string agent_id = 3;
+  string user_id = 4;
+  string app_id = 5;
+}
+

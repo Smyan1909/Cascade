@@ -8,6 +8,7 @@ Purpose: high-level architecture, data boundaries, and conventions before writin
 - Auth: `__initial_auth_token` initializes Firestore and binds `userId` + `__app_id`. All persistence and agent init must include this context.
 - Model policy: LLM-agnostic; select provider/name/endpoint via env at runtime. Never hardcode model IDs.
 - Platforms: Windows/Java via UIA3 (FlaUI); Web via Playwright. OCR via Windows.Media.Ocr; input fallback via InputSimulatorPlus.
+- Agent-to-Agent (A2A): gRPC `AgentCommService` lets Explorer/Worker/Orchestrator for the same user/app exchange messages; delivery is at-least-once so handlers must be idempotent on `message_id`.
 
 ## Data & Paths
 - Skill Maps: `/artifacts/{__app_id}/users/{userId}/skill_maps/{skillId}`
@@ -25,6 +26,7 @@ Purpose: high-level architecture, data boundaries, and conventions before writin
 ## Logging & Telemetry
 - Structured JSON logs; include `userId`, `appId`, `runId`, correlation IDs.
 - Separate interaction logs (actions, selectors) from model prompts; redact sensitive fields.
+- A2A handlers must log message ids and skip already-processed deliveries.
 
 ## Testing Strategy (summary)
 - Unit per layer, contract tests for proto, provider smoke tests (UIA3/Playwright), Firestore emulator tests for persistence, integration per agent, optional E2E via docker-compose.

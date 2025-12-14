@@ -6,7 +6,7 @@ with automatic conversion to/from proto messages.
 """
 
 from enum import IntEnum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -452,3 +452,400 @@ class StartAppRequest(BaseModel):
                 "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
             )
 
+
+class WorkerEventType(IntEnum):
+    """Worker event types for streaming progress."""
+
+    WORKER_EVENT_UNSPECIFIED = 0
+    RUN_STARTED = 1
+    STEP_STARTED = 2
+    STEP_COMPLETED = 3
+    STEP_FAILED = 4
+    CHECKPOINT_SAVED = 5
+    RUN_COMPLETED = 6
+    RUN_FAILED = 7
+    LOG = 8
+
+
+class WorkerRunRequest(BaseModel):
+    """Request to start a Worker run."""
+
+    task: Optional[str] = None
+    skill_id: Optional[str] = None
+    run_id: Optional[str] = None
+    user_id: Optional[str] = None
+    app_id: Optional[str] = None
+    auth_token: Optional[str] = None
+    inputs: Dict[str, str] = Field(default_factory=dict)
+    dry_run: bool = False
+    max_replans: int = 0
+
+    def to_proto(self):
+        """Convert to proto message."""
+        try:
+            from cascade_client.proto import cascade_pb2
+
+            return cascade_pb2.WorkerRunRequest(
+                task=self.task or "",
+                skill_id=self.skill_id or "",
+                run_id=self.run_id or "",
+                user_id=self.user_id or "",
+                app_id=self.app_id or "",
+                auth_token=self.auth_token or "",
+                inputs=self.inputs,
+                dry_run=self.dry_run,
+                max_replans=self.max_replans,
+            )
+        except ImportError:
+            raise ImportError(
+                "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
+            )
+
+    @classmethod
+    def from_proto(cls, proto_msg) -> "WorkerRunRequest":
+        """Create from proto message."""
+        return cls(
+            task=proto_msg.task or None,
+            skill_id=proto_msg.skill_id or None,
+            run_id=proto_msg.run_id or None,
+            user_id=proto_msg.user_id or None,
+            app_id=proto_msg.app_id or None,
+            auth_token=proto_msg.auth_token or None,
+            inputs=dict(proto_msg.inputs),
+            dry_run=proto_msg.dry_run,
+            max_replans=proto_msg.max_replans,
+        )
+
+
+class WorkerResumeRequest(BaseModel):
+    """Request to resume a Worker run from checkpoint."""
+
+    run_id: str
+    user_id: Optional[str] = None
+    app_id: Optional[str] = None
+    auth_token: Optional[str] = None
+
+    def to_proto(self):
+        """Convert to proto message."""
+        try:
+            from cascade_client.proto import cascade_pb2
+
+            return cascade_pb2.WorkerResumeRequest(
+                run_id=self.run_id,
+                user_id=self.user_id or "",
+                app_id=self.app_id or "",
+                auth_token=self.auth_token or "",
+            )
+        except ImportError:
+            raise ImportError(
+                "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
+            )
+
+    @classmethod
+    def from_proto(cls, proto_msg) -> "WorkerResumeRequest":
+        """Create from proto message."""
+        return cls(
+            run_id=proto_msg.run_id,
+            user_id=proto_msg.user_id or None,
+            app_id=proto_msg.app_id or None,
+            auth_token=proto_msg.auth_token or None,
+        )
+
+
+class WorkerEvent(BaseModel):
+    """Streaming event emitted by the Worker runtime."""
+
+    run_id: str
+    skill_id: str
+    event_type: WorkerEventType
+    step_index: Optional[int] = None
+    message: str = ""
+    error: Optional[str] = None
+    metadata: Dict[str, str] = Field(default_factory=dict)
+    checkpoint: Optional[Dict[str, Any]] = None
+    planning_phase: bool = False
+    selected_skills: List[str] = Field(default_factory=list)
+    verification_result: Optional[str] = None
+
+    def to_proto(self):
+        """Convert to proto message."""
+        try:
+            from cascade_client.proto import cascade_pb2
+            import json
+
+            checkpoint_json = (
+                json.dumps(self.checkpoint) if self.checkpoint is not None else ""
+            )
+            return cascade_pb2.WorkerEvent(
+                run_id=self.run_id,
+                skill_id=self.skill_id,
+                event_type=self.event_type.value,
+                step_index=self.step_index if self.step_index is not None else -1,
+                message=self.message,
+                error=self.error or "",
+                metadata=self.metadata,
+                checkpoint=checkpoint_json,
+                planning_phase=self.planning_phase,
+                selected_skills=self.selected_skills,
+                verification_result=self.verification_result or "",
+            )
+        except ImportError:
+            raise ImportError(
+                "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
+            )
+
+    @classmethod
+    def from_proto(cls, proto_msg) -> "WorkerEvent":
+        """Create from proto message."""
+        import json
+
+        checkpoint = None
+        if proto_msg.checkpoint:
+            try:
+                checkpoint = json.loads(proto_msg.checkpoint)
+            except json.JSONDecodeError:
+                checkpoint = {"raw": proto_msg.checkpoint}
+        step_index = proto_msg.step_index if proto_msg.step_index >= 0 else None
+        return cls(
+            run_id=proto_msg.run_id,
+            skill_id=proto_msg.skill_id,
+            event_type=WorkerEventType(proto_msg.event_type),
+            step_index=step_index,
+            message=proto_msg.message,
+            error=proto_msg.error or None,
+            metadata=dict(proto_msg.metadata),
+            checkpoint=checkpoint,
+            planning_phase=proto_msg.planning_phase,
+            selected_skills=list(proto_msg.selected_skills),
+            verification_result=proto_msg.verification_result or None,
+        )
+
+
+# Agent-to-Agent (A2A) models -------------------------------------------------
+
+
+class AgentDescriptor(BaseModel):
+    """Metadata describing an agent instance."""
+
+    agent_id: str
+    role: Optional[str] = None
+    run_id: Optional[str] = None
+
+    @classmethod
+    def from_proto(cls, proto_msg) -> "AgentDescriptor":
+        return cls(
+            agent_id=proto_msg.agent_id,
+            role=proto_msg.role or None,
+            run_id=proto_msg.run_id or None,
+        )
+
+    def to_proto(self):
+        try:
+            from cascade_client.proto import cascade_pb2
+
+            return cascade_pb2.AgentDescriptor(
+                agent_id=self.agent_id,
+                role=self.role or "",
+                run_id=self.run_id or "",
+            )
+        except ImportError:
+            raise ImportError(
+                "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
+            )
+
+
+class AgentRegisterRequest(BaseModel):
+    """Registration request for an agent instance."""
+
+    user_id: str
+    app_id: str
+    auth_token: str
+    role: Optional[str] = None
+    run_id: Optional[str] = None
+
+    def to_proto(self):
+        try:
+            from cascade_client.proto import cascade_pb2
+
+            return cascade_pb2.AgentRegisterRequest(
+                user_id=self.user_id,
+                app_id=self.app_id,
+                auth_token=self.auth_token,
+                role=self.role or "",
+                run_id=self.run_id or "",
+            )
+        except ImportError:
+            raise ImportError(
+                "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
+            )
+
+    @classmethod
+    def from_proto(cls, proto_msg) -> "AgentRegisterRequest":
+        return cls(
+            user_id=proto_msg.user_id,
+            app_id=proto_msg.app_id,
+            auth_token=proto_msg.auth_token,
+            role=proto_msg.role or None,
+            run_id=proto_msg.run_id or None,
+        )
+
+
+class AgentRegisterResponse(BaseModel):
+    """Response containing assigned agent_id."""
+
+    agent_id: str
+
+    @classmethod
+    def from_proto(cls, proto_msg) -> "AgentRegisterResponse":
+        return cls(agent_id=proto_msg.agent_id)
+
+
+class AgentMessage(BaseModel):
+    """Message envelope for A2A communication."""
+
+    message_id: str
+    user_id: str
+    app_id: str
+    sender_agent_id: str
+    sender_role: Optional[str] = None
+    target_agent_id: Optional[str] = None
+    target_role: Optional[str] = None
+    run_id: Optional[str] = None
+    headers: Dict[str, str] = Field(default_factory=dict)
+    json_payload: str = ""
+    created_at_ms: Optional[int] = None
+
+    def to_proto(self):
+        try:
+            from cascade_client.proto import cascade_pb2
+
+            return cascade_pb2.AgentMessage(
+                message_id=self.message_id,
+                user_id=self.user_id,
+                app_id=self.app_id,
+                sender_agent_id=self.sender_agent_id,
+                sender_role=self.sender_role or "",
+                target_agent_id=self.target_agent_id or "",
+                target_role=self.target_role or "",
+                run_id=self.run_id or "",
+                headers=self.headers,
+                json_payload=self.json_payload,
+                created_at_ms=self.created_at_ms or 0,
+            )
+        except ImportError:
+            raise ImportError(
+                "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
+            )
+
+    @classmethod
+    def from_proto(cls, proto_msg) -> "AgentMessage":
+        return cls(
+            message_id=proto_msg.message_id,
+            user_id=proto_msg.user_id,
+            app_id=proto_msg.app_id,
+            sender_agent_id=proto_msg.sender_agent_id,
+            sender_role=proto_msg.sender_role or None,
+            target_agent_id=proto_msg.target_agent_id or None,
+            target_role=proto_msg.target_role or None,
+            run_id=proto_msg.run_id or None,
+            headers=dict(proto_msg.headers),
+            json_payload=proto_msg.json_payload,
+            created_at_ms=proto_msg.created_at_ms or None,
+        )
+
+
+class AgentEnvelope(BaseModel):
+    """Streamed inbox delivery with ack token."""
+
+    message: AgentMessage
+    ack_token: str
+
+    def to_proto(self):
+        try:
+            from cascade_client.proto import cascade_pb2
+
+            msg_proto = self.message.to_proto()
+            return cascade_pb2.AgentEnvelope(message=msg_proto, ack_token=self.ack_token)
+        except ImportError:
+            raise ImportError(
+                "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
+            )
+
+    @classmethod
+    def from_proto(cls, proto_msg) -> "AgentEnvelope":
+        return cls(
+            message=AgentMessage.from_proto(proto_msg.message),
+            ack_token=proto_msg.ack_token,
+        )
+
+
+class AgentInboxRequest(BaseModel):
+    """Request to stream inbox messages for an agent."""
+
+    agent_id: str
+    user_id: str
+    app_id: str
+    run_id: Optional[str] = None
+    role: Optional[str] = None
+
+    def to_proto(self):
+        try:
+            from cascade_client.proto import cascade_pb2
+
+            return cascade_pb2.AgentInboxRequest(
+                agent_id=self.agent_id,
+                user_id=self.user_id,
+                app_id=self.app_id,
+                run_id=self.run_id or "",
+                role=self.role or "",
+            )
+        except ImportError:
+            raise ImportError(
+                "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
+            )
+
+    @classmethod
+    def from_proto(cls, proto_msg) -> "AgentInboxRequest":
+        return cls(
+            agent_id=proto_msg.agent_id,
+            user_id=proto_msg.user_id,
+            app_id=proto_msg.app_id,
+            run_id=proto_msg.run_id or None,
+            role=proto_msg.role or None,
+        )
+
+
+class AgentAck(BaseModel):
+    """Acknowledgement for processed messages."""
+
+    message_id: str
+    ack_token: str
+    agent_id: str
+    user_id: str
+    app_id: str
+
+    def to_proto(self):
+        try:
+            from cascade_client.proto import cascade_pb2
+
+            return cascade_pb2.AgentAck(
+                message_id=self.message_id,
+                ack_token=self.ack_token,
+                agent_id=self.agent_id,
+                user_id=self.user_id,
+                app_id=self.app_id,
+            )
+        except ImportError:
+            raise ImportError(
+                "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
+            )
+
+    @classmethod
+    def from_proto(cls, proto_msg) -> "AgentAck":
+        return cls(
+            message_id=proto_msg.message_id,
+            ack_token=proto_msg.ack_token,
+            agent_id=proto_msg.agent_id,
+            user_id=proto_msg.user_id,
+            app_id=proto_msg.app_id,
+        )
