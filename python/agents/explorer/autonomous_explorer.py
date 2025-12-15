@@ -63,8 +63,9 @@ class HybridExplorer:
         self._add_skill_tools()
 
     def _add_skill_tools(self) -> None:
-        """Add skill map saving tool for the explorer agent."""
+        """Add skill map and documentation saving tools for the explorer agent."""
         from storage.firestore_client import FirestoreClient
+        from .documentation_map import DocumentationMap
         
         fs = FirestoreClient(self._context)
         context = self._context  # Capture for closure
@@ -92,6 +93,32 @@ class HybridExplorer:
             except Exception as e:
                 return {
                     "content": [{"type": "text", "text": f"Error saving skill map: {str(e)}"}],
+                    "isError": True
+                }
+        
+        def save_documentation(documentation_json: str) -> Dict[str, Any]:
+            """Save documentation to Firestore."""
+            try:
+                doc_data = json.loads(documentation_json)
+                
+                # Ensure required metadata fields
+                if "metadata" in doc_data:
+                    doc_data["metadata"]["app_id"] = doc_data["metadata"].get("app_id", context.app_id)
+                    doc_data["metadata"]["user_id"] = doc_data["metadata"].get("user_id", context.user_id)
+                    if "doc_id" not in doc_data["metadata"]:
+                        doc_data["metadata"]["doc_id"] = str(uuid.uuid4())
+                
+                documentation = DocumentationMap.model_validate(doc_data)
+                fs.upsert_documentation(documentation)
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Successfully saved documentation: {documentation.metadata.doc_id} - '{documentation.metadata.title}'"
+                    }]
+                }
+            except Exception as e:
+                return {
+                    "content": [{"type": "text", "text": f"Error saving documentation: {str(e)}"}],
                     "isError": True
                 }
         
@@ -126,6 +153,42 @@ class HybridExplorer:
             },
             handler=lambda skill_map_json: save_skill_map(skill_map_json),
         )
+        
+        self._registry.register_tool(
+            name="save_documentation",
+            description="""Save structured documentation about the application to storage. Use this to document:
+- Application overviews and navigation guides
+- Workflow descriptions and best practices
+- UI element guides and their purposes
+- Troubleshooting tips and common issues
+
+The documentation_json should be a JSON string with this format:
+{
+  "metadata": {
+    "doc_id": "optional-id",
+    "title": "Document Title",
+    "doc_type": "overview|workflow|element_guide|troubleshooting",
+    "description": "Brief summary of this documentation",
+    "tags": ["tag1", "tag2"],
+    "related_skills": ["skill-id-1", "skill-id-2"]
+  },
+  "sections": [
+    {
+      "heading": "Section Title",
+      "content": "Markdown content describing this section...",
+      "element_references": ["Button Name", "Menu Item"],
+      "code_examples": []
+    }
+  ]
+}""",
+            input_schema={
+                "type": "object",
+                "properties": {"documentation_json": {"type": "string", "description": "JSON string of the documentation"}},
+                "required": ["documentation_json"]
+            },
+            handler=lambda documentation_json: save_documentation(documentation_json),
+        )
+
 
     def _log(self, msg: str) -> None:
         if self._verbose:
@@ -274,7 +337,7 @@ class HybridExplorer:
             skill_verified = False
             
             while attempts <= max_fix_attempts and not skill_verified:
-                skill_summary = self._get_skill_summary(skill_id)
+                skill_summary = self._get_skill_for_verification(skill_id)
                 if not skill_summary:
                     self._log(f"Skill {skill_id[:8]}... not found, skipping")
                     break
@@ -352,8 +415,8 @@ class HybridExplorer:
                         pass
         return skill_ids
 
-    def _get_skill_summary(self, skill_id: str) -> Optional[str]:
-        """Get a summary of a skill map from Firestore."""
+    def _get_skill_for_verification(self, skill_id: str) -> Optional[str]:
+        """Get a skill map from Firestore for verification."""
         try:
             from storage.firestore_client import FirestoreClient
             fs = FirestoreClient(self._context)
@@ -371,10 +434,8 @@ class HybridExplorer:
                 f"Description: {meta.get('description', 'N/A')}",
                 f"Steps ({len(steps)}):",
             ]
-            for i, step in enumerate(steps[:10], 1):  # Limit to first 10
-                action = step.get('action', 'unknown')
-                desc = step.get('step_description', '')
-                lines.append(f"  {i}. {action}: {desc}")
+            for i, step in enumerate(steps[:10], 1):
+                lines.append(f"  {i}. {json.dumps(step)}")
             
             if len(steps) > 10:
                 lines.append(f"  ... and {len(steps) - 10} more steps")

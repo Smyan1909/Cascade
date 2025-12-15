@@ -44,6 +44,8 @@ class ControlType(IntEnum):
     TREE = 5
     TABLE = 6
     CUSTOM = 7
+    LISTITEM = 8  # ListItem, checkbox, radio button
+    TAB = 9       # TabItem
 
 
 class ImageFormat(IntEnum):

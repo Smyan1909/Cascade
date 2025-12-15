@@ -157,3 +157,102 @@ class TestDocumentCRUD:
         result = firestore_client.get_document("nonexistent/path/to/doc")
         assert result is None, "Non-existent document should return None"
         print("\n[TEST] Correctly returned None for non-existent document")
+
+
+@pytest.fixture
+def sample_documentation():
+    """Create a sample DocumentationMap for testing."""
+    from agents.explorer.documentation_map import (
+        DocumentationMap, DocumentationMetadata, DocumentationSection
+    )
+    
+    return DocumentationMap(
+        metadata=DocumentationMetadata(
+            doc_id=f"test-doc-{uuid.uuid4().hex[:8]}",
+            app_id="cascade-prototype",
+            user_id="test-user",
+            title="Calculator User Guide",
+            doc_type="overview",
+            description="Guide for using the calculator application",
+            tags=["calculator", "guide", "basics"],
+            related_skills=["calc-add", "calc-subtract"],
+        ),
+        sections=[
+            DocumentationSection(
+                heading="Getting Started",
+                content="Open the calculator from the Start menu.",
+                element_references=["Start Menu", "Calculator Icon"],
+            ),
+            DocumentationSection(
+                heading="Basic Operations",
+                content="Use the number pad to enter numbers and operators.",
+                element_references=["Number Pad", "Equals Button"],
+                code_examples=["5 + 3 = 8"],
+            ),
+        ],
+    )
+
+
+class TestDocumentationPersistence:
+    """Test documentation CRUD operations."""
+    
+    def test_save_documentation(self, firestore_client, sample_documentation):
+        """Test saving documentation to Firestore emulator."""
+        doc_id = sample_documentation.metadata.doc_id
+        print(f"\n[TEST] Saving documentation: {doc_id}")
+        
+        # Save
+        firestore_client.upsert_documentation(sample_documentation)
+        print(f"[TEST] Documentation saved successfully")
+        
+        # Verify path
+        path = firestore_client.documentation_path(doc_id)
+        print(f"[TEST] Saved at path: {path}")
+    
+    def test_get_documentation(self, firestore_client, sample_documentation):
+        """Test retrieving documentation by ID."""
+        doc_id = sample_documentation.metadata.doc_id
+        
+        # Save first
+        firestore_client.upsert_documentation(sample_documentation)
+        
+        # Retrieve
+        data = firestore_client.get_documentation(doc_id)
+        assert data is not None, f"Documentation {doc_id} should exist"
+        assert data["metadata"]["doc_id"] == doc_id
+        assert data["metadata"]["title"] == "Calculator User Guide"
+        assert "calculator" in data["metadata"]["tags"]
+        print(f"\n[TEST] Retrieved documentation: {doc_id}")
+        print(f"[TEST] Title: {data['metadata']['title']}")
+    
+    def test_list_documentation(self, firestore_client, sample_documentation):
+        """Test listing all documentation."""
+        # Save first
+        firestore_client.upsert_documentation(sample_documentation)
+        
+        # List
+        docs = firestore_client.list_documentation()
+        
+        assert sample_documentation.metadata.doc_id in docs, \
+            "Saved documentation should appear in list"
+        
+        print(f"\n[TEST] Found {len(docs)} documentation entries:")
+        for doc_id, data in docs.items():
+            title = data.get("metadata", {}).get("title", "Unknown")
+            print(f"  - {doc_id}: {title}")
+    
+    def test_search_documentation_by_tags(self, firestore_client, sample_documentation):
+        """Test searching documentation by tags."""
+        # Save first
+        firestore_client.upsert_documentation(sample_documentation)
+        
+        # Search with matching tag
+        results = firestore_client.search_documentation_by_tags(["calculator"])
+        assert len(results) > 0, "Should find documentation with 'calculator' tag"
+        print(f"\n[TEST] Found {len(results)} docs with 'calculator' tag")
+        
+        # Search with non-matching tag
+        no_results = firestore_client.search_documentation_by_tags(["nonexistent-tag-xyz"])
+        assert sample_documentation.metadata.doc_id not in no_results
+        print(f"[TEST] Correctly found 0 docs with non-existent tag")
+

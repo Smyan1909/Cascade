@@ -868,12 +868,14 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                 }
             }
 
-            // NEW: Fallback for name-based search ignoring ControlType
-            // This handles cases where LLM sends wrong control type (e.g., Button instead of ListItem)
-            if (!string.IsNullOrWhiteSpace(selector.Name) && selector.ControlType != Cascade.Proto.ControlType.Unspecified)
+            // Fallback for name-based search when no elements matched
+            // This handles cases where LLM sends wrong control type OR when name doesn't exactly match
+            if (!string.IsNullOrWhiteSpace(selector.Name))
             {
-                Console.WriteLine($"[DIAG] FindElementAsync: Trying name-only fallback for '{selector.Name}'");
-                var nameOnlyMatch = candidatesList.FirstOrDefault(e =>
+                Console.WriteLine($"[DIAG] FindElementAsync: Trying name-based fallback for '{selector.Name}'");
+
+                // First try exact name match
+                var nameMatches = candidatesList.Where(e =>
                 {
                     try
                     {
@@ -883,11 +885,51 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                     {
                         return false;
                     }
-                });
-                if (nameOnlyMatch != null)
+                }).ToList();
+
+                Console.WriteLine($"[DIAG] FindElementAsync: Found {nameMatches.Count} exact name matches for '{selector.Name}'");
+
+                // If no exact match, try contains-based matching (useful for ListItems where name might include extra text)
+                if (nameMatches.Count == 0)
                 {
-                    Console.WriteLine($"[DIAG] FindElementAsync: Found name-only match: ControlType={nameOnlyMatch.ControlType}, Name={nameOnlyMatch.Name ?? "null"}");
-                    return Task.FromResult<AutomationElement?>(nameOnlyMatch);
+                    Console.WriteLine($"[DIAG] FindElementAsync: Trying contains-based name matching for '{selector.Name}'");
+                    nameMatches = candidatesList.Where(e =>
+                    {
+                        try
+                        {
+                            var name = e.Name;
+                            if (string.IsNullOrEmpty(name)) return false;
+                            return name.Contains(selector.Name, StringComparison.OrdinalIgnoreCase) ||
+                                   selector.Name.Contains(name, StringComparison.OrdinalIgnoreCase);
+                        }
+                        catch
+                        {
+                            return false;
+                        }
+                    }).ToList();
+                    Console.WriteLine($"[DIAG] FindElementAsync: Found {nameMatches.Count} contains-based matches for '{selector.Name}'");
+                }
+
+                if (nameMatches.Count > 0)
+                {
+                    // Prioritize clickable control types over non-clickable ones like Text
+                    // Order: ListItem > Button > MenuItem > TabItem > TreeItem > other > Text
+                    var prioritized = nameMatches
+                        .OrderBy(e => e.ControlType switch
+                        {
+                            FlaUI.Core.Definitions.ControlType.ListItem => 0,
+                            FlaUI.Core.Definitions.ControlType.Button => 1,
+                            FlaUI.Core.Definitions.ControlType.MenuItem => 2,
+                            FlaUI.Core.Definitions.ControlType.TabItem => 3,
+                            FlaUI.Core.Definitions.ControlType.TreeItem => 4,
+                            FlaUI.Core.Definitions.ControlType.Hyperlink => 5,
+                            FlaUI.Core.Definitions.ControlType.Text => 99, // Text is lowest priority - usually a label
+                            _ => 50 // Everything else in the middle
+                        })
+                        .First();
+
+                    Console.WriteLine($"[DIAG] FindElementAsync: Selected prioritized match: ControlType={prioritized.ControlType}, Name={prioritized.Name ?? "null"}");
+                    return Task.FromResult<AutomationElement?>(prioritized);
                 }
             }
 
@@ -1020,6 +1062,8 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
             Cascade.Proto.ControlType.Tree => FlaUI.Core.Definitions.ControlType.TreeItem,
             Cascade.Proto.ControlType.Table => FlaUI.Core.Definitions.ControlType.DataGrid,
             Cascade.Proto.ControlType.Custom => FlaUI.Core.Definitions.ControlType.Custom,
+            Cascade.Proto.ControlType.Listitem => FlaUI.Core.Definitions.ControlType.ListItem,
+            Cascade.Proto.ControlType.Tab => FlaUI.Core.Definitions.ControlType.TabItem,
             _ => null
         };
 
@@ -1033,6 +1077,8 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
         if (controlType == FlaUI.Core.Definitions.ControlType.MenuItem) return Cascade.Proto.ControlType.Menu;
         if (controlType == FlaUI.Core.Definitions.ControlType.TreeItem) return Cascade.Proto.ControlType.Tree;
         if (controlType == FlaUI.Core.Definitions.ControlType.DataGrid) return Cascade.Proto.ControlType.Table;
+        if (controlType == FlaUI.Core.Definitions.ControlType.ListItem) return Cascade.Proto.ControlType.Listitem;
+        if (controlType == FlaUI.Core.Definitions.ControlType.TabItem) return Cascade.Proto.ControlType.Tab;
         return Cascade.Proto.ControlType.Custom;
     }
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from cascade_client.auth.context import CascadeContext
 from cascade_client.grpc_client import CascadeGrpcClient
@@ -46,6 +46,7 @@ class AutonomousWorker:
         register_body_tools(self._registry, grpc_client)
         register_explorer_tools(self._registry)
         self._register_skill_tools()
+        self._register_documentation_tools()
 
     def _register_skill_tools(self) -> None:
         """Register skill execution tools from available skill maps."""
@@ -67,6 +68,125 @@ class AutonomousWorker:
             
         except Exception as e:
             print(f"[Worker] Could not load skills: {e}")
+
+    def _register_documentation_tools(self) -> None:
+        """Register documentation query tools."""
+        from storage.firestore_client import FirestoreClient
+        from agents.worker.documentation_loader import (
+            load_all_documentation,
+            get_documentation_by_id,
+            search_documentation,
+        )
+        
+        context = self._context  # Capture for closures
+        
+        def get_documentation(
+            doc_id: str = "",
+            tags: List[str] = None,
+            list_all: bool = False
+        ) -> Dict[str, Any]:
+            """Query documentation from storage."""
+            try:
+                if doc_id:
+                    # Get specific document by ID
+                    doc = get_documentation_by_id(doc_id, context)
+                    if doc:
+                        return {
+                            "content": [{
+                                "type": "text",
+                                "text": doc.get_full_content()
+                            }]
+                        }
+                    else:
+                        return {
+                            "content": [{"type": "text", "text": f"Documentation '{doc_id}' not found"}],
+                            "isError": True
+                        }
+                
+                elif tags:
+                    # Search by tags
+                    docs = search_documentation(tags, context)
+                    if docs:
+                        results = []
+                        for doc in docs:
+                            results.append(f"**{doc.metadata.title}** (ID: {doc.metadata.doc_id})")
+                            results.append(f"  {doc.metadata.description}")
+                            results.append(f"  Tags: {', '.join(doc.metadata.tags)}")
+                            results.append("")
+                        return {
+                            "content": [{
+                                "type": "text",
+                                "text": f"Found {len(docs)} documents:\n\n" + "\n".join(results)
+                            }]
+                        }
+                    else:
+                        return {
+                            "content": [{"type": "text", "text": f"No documentation found for tags: {tags}"}]
+                        }
+                
+                else:
+                    # List all documentation (summaries only)
+                    docs = load_all_documentation(context)
+                    if docs:
+                        results = []
+                        for doc in docs:
+                            results.append(f"- **{doc.metadata.title}** (ID: `{doc.metadata.doc_id}`)")
+                            results.append(f"  Type: {doc.metadata.doc_type}")
+                            if doc.metadata.description:
+                                results.append(f"  {doc.metadata.description}")
+                            if doc.metadata.tags:
+                                results.append(f"  Tags: {', '.join(doc.metadata.tags)}")
+                            results.append("")
+                        return {
+                            "content": [{
+                                "type": "text",
+                                "text": f"## Available Documentation ({len(docs)} documents)\n\n" + "\n".join(results) + "\n\nUse get_documentation with doc_id to read full content."
+                            }]
+                        }
+                    else:
+                        return {
+                            "content": [{"type": "text", "text": "No documentation available for this application."}]
+                        }
+                        
+            except Exception as e:
+                return {
+                    "content": [{"type": "text", "text": f"Error querying documentation: {str(e)}"}],
+                    "isError": True
+                }
+        
+        self._registry.register_tool(
+            name="get_documentation",
+            description="""Query documentation about the application. Use this FIRST to understand the software before taking actions.
+
+Usage:
+- List all docs: get_documentation() with no arguments
+- Get specific doc: get_documentation(doc_id="doc-id-here")
+- Search by tags: get_documentation(tags=["navigation", "login"])
+
+Always start by listing available documentation to understand what guidance exists.""",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "doc_id": {
+                        "type": "string",
+                        "description": "Specific document ID to retrieve (get full content)"
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Tags to search for (returns matching documents)"
+                    }
+                }
+            },
+            handler=lambda doc_id="", tags=None: get_documentation(doc_id, tags or []),
+        )
+        
+        # Log documentation availability
+        try:
+            docs = load_all_documentation(context)
+            print(f"[Worker] Found {len(docs)} documentation entries")
+        except Exception:
+            print("[Worker] Could not load documentation")
 
     def _register_single_skill(self, skill) -> None:
         """Register a single skill as a tool."""
