@@ -18,7 +18,7 @@ State your plan before taking actions.
 ### 2. EXECUTE
 Execute your plan:
 - Use existing skills when available (execute_skill_*)
-- Or use direct tool calls (click_element, type_text, etc.)
+- Or use direct tool calls when skills are not available or the skill does not cover the action (click_element, type_text, etc.)
 - Observe the state after each action
 
 ### 3. VERIFY
@@ -27,9 +27,17 @@ After executing, verify:
 - Is the app in the expected state?
 - Did I accomplish the task?
 
-### 4. REPLAN (if needed)
-If something went wrong:
+### 4. RETRY (if needed)
+If something went wrong, retry the action:
 - What happened?
+- Why did it fail?
+- What should I try differently?
+- Update your approach and continue
+
+### 5. REPLAN (if needed)
+If something went wrong and the retry fails, plan again:
+- What happened?
+- Why did it fail?
 - What should I try differently?
 - Update your approach and continue
 
@@ -67,7 +75,7 @@ If something went wrong:
 **EXECUTE**: 
 - Call get_semantic_tree() to find the button
 - Found "Seven" button
-- Click it
+- Click it using the appropriate execute_skill_ or tool call
 
 **VERIFY**: The display now shows "7". Success!
 
