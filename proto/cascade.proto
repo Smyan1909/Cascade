@@ -292,3 +292,33 @@ message AgentAck {
   string app_id = 5;
 }
 
+// Code execution for native automation (C# via Roslyn, PowerShell, etc.)
+service CodeExecutionService {
+  // Execute a code artifact (compiled and run by Body via Roslyn or equivalent)
+  rpc ExecuteCode(CodeExecutionRequest) returns (CodeExecutionResult);
+}
+
+message CodeExecutionRequest {
+  // Code artifact ID from Firestore (contains the generated code)
+  string artifact_id = 1;
+  // Language/runtime: "csharp", "powershell", etc.
+  string language = 2;
+  // Skill ID this artifact is associated with (for context)
+  string skill_id = 3;
+  // Runtime inputs passed to the code
+  map<string, string> inputs = 4;
+  // User/app context for scoping
+  string user_id = 5;
+  string app_id = 6;
+}
+
+message CodeExecutionResult {
+  bool success = 1;
+  // Serialized output from the code execution
+  string output = 2;
+  // Error message if execution failed
+  string error = 3;
+  // Execution time in milliseconds
+  int64 execution_time_ms = 4;
+}
+

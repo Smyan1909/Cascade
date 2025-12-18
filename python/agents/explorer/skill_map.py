@@ -72,6 +72,20 @@ class SkillMetadata(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc),
         description="Last update timestamp",
     )
+    
+    # Initial state context: describes the application state when this skill was discovered
+    initial_state_description: str = Field(
+        default="",
+        description="Human-readable description of the initial application state when this skill was discovered (e.g., 'Calculator in Standard mode')",
+    )
+    initial_state_tree: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional semantic tree snapshot of the initial state. Include only when the human-readable description is ambiguous or insufficient.",
+    )
+    requires_initial_state: bool = Field(
+        default=False,
+        description="If True, the application must be in the initial state before executing this skill",
+    )
 
 class ApiEndpoint(BaseModel):
     """API endpoint description for automation."""

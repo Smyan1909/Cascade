@@ -12,9 +12,17 @@ from cascade_client.grpc_client import CascadeGrpcClient
 from mcp_server.tool_registry import ToolRegistry
 from mcp_server.body_tools import register_body_tools
 from mcp_server.explorer_tools import register_explorer_tools
+from mcp_server.api_tools import register_api_tools, register_code_execution_tool
 
 from agents.core.autonomous_agent import AutonomousAgent, AgentConfig, AgentResult
-from agents.core.verify_prompts import WORKER_SYSTEM_PROMPT, get_worker_task
+from agents.worker.prompts_autonomous import WORKER_SYSTEM_PROMPT, get_worker_task
+from agents.worker.skill_context import (
+    load_all_skills,
+    categorize_skill,
+    format_skill_as_context,
+    get_skill_summaries,
+    get_executable_skills,
+)
 
 
 class AutonomousWorker:
@@ -45,29 +53,118 @@ class AutonomousWorker:
         self._registry = ToolRegistry()
         register_body_tools(self._registry, grpc_client)
         register_explorer_tools(self._registry)
-        self._register_skill_tools()
+        self._register_skill_context_tools()
+        self._register_api_tools()
         self._register_documentation_tools()
 
-    def _register_skill_tools(self) -> None:
-        """Register skill execution tools from available skill maps."""
+    def _register_skill_context_tools(self) -> None:
+        """Register skill context tools (list and read skills)."""
+        context = self._context
+        
+        def list_skills() -> Dict[str, Any]:
+            """List all available skills with summaries."""
+            try:
+                skills = load_all_skills(context)
+                summaries = get_skill_summaries(skills)
+                
+                if not summaries:
+                    return {
+                        "content": [{"type": "text", "text": "No skills available for this application."}]
+                    }
+                
+                lines = [f"## Available Skills ({len(summaries)} total)\n"]
+                for s in summaries:
+                    type_badge = f"[{s['type'].upper()}]"
+                    lines.append(f"- **{s['skill_id']}** {type_badge}")
+                    if s['capability']:
+                        lines.append(f"  Capability: {s['capability']}")
+                    if s['description']:
+                        lines.append(f"  {s['description'][:100]}")
+                    lines.append("")
+                
+                lines.append("\nUse `read_skill(skill_id)` to get detailed instructions.")
+                
+                return {
+                    "content": [{"type": "text", "text": "\n".join(lines)}]
+                }
+            except Exception as e:
+                return {
+                    "content": [{"type": "text", "text": f"Error listing skills: {str(e)}"}],
+                    "isError": True
+                }
+        
+        def read_skill(skill_id: str) -> Dict[str, Any]:
+            """Read full skill content as context."""
+            try:
+                skills = load_all_skills(context)
+                skill = next((s for s in skills if s.metadata.skill_id == skill_id), None)
+                
+                if not skill:
+                    return {
+                        "content": [{"type": "text", "text": f"Skill '{skill_id}' not found."}],
+                        "isError": True
+                    }
+                
+                formatted = format_skill_as_context(skill)
+                return {
+                    "content": [{"type": "text", "text": formatted}]
+                }
+            except Exception as e:
+                return {
+                    "content": [{"type": "text", "text": f"Error reading skill: {str(e)}"}],
+                    "isError": True
+                }
+        
+        # Register list_skills tool
+        self._registry.register_tool(
+            name="list_skills",
+            description="""List all available skills for this application.
+
+Returns summaries of skills with their types:
+- UI: Use base tools (click_element, type_text) guided by skill instructions
+- WEB_API: Use call_http_api tool with skill endpoint details
+- NATIVE_CODE: Use execute_code_skill for C#/Roslyn automation
+
+Call read_skill(skill_id) to get detailed instructions for a specific skill.""",
+            input_schema={"type": "object", "properties": {}},
+            handler=list_skills,
+        )
+        
+        # Register read_skill tool
+        self._registry.register_tool(
+            name="read_skill",
+            description="""Read detailed instructions for a specific skill.
+
+Returns step-by-step guidance on how to execute the skill:
+- For UI skills: Shows which elements to interact with and selectors to use
+- For API skills: Shows endpoints, methods, and parameters
+- For code skills: Shows how to call execute_code_skill
+
+IMPORTANT: Read skills BEFORE executing tasks to understand the right approach.""",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "skill_id": {
+                        "type": "string",
+                        "description": "ID of the skill to read"
+                    }
+                },
+                "required": ["skill_id"]
+            },
+            handler=lambda skill_id: read_skill(skill_id),
+        )
+        
+        # Log skill availability
         try:
-            from storage.firestore_client import FirestoreClient
-            from agents.explorer.skill_map import SkillMap
-            
-            fs = FirestoreClient(self._context)
-            skill_maps = fs.list_skill_maps()
-            
-            for skill_id, data in skill_maps.items():
-                try:
-                    skill = SkillMap.model_validate(data)
-                    self._register_single_skill(skill)
-                except Exception:
-                    continue
-                    
-            print(f"[Worker] Registered {len(skill_maps)} skill tools")
-            
+            skills = load_all_skills(context)
+            print(f"[Worker] Found {len(skills)} skills (context-based)")
         except Exception as e:
             print(f"[Worker] Could not load skills: {e}")
+    
+    def _register_api_tools(self) -> None:
+        """Register API and code execution tools."""
+        register_api_tools(self._registry)
+        register_code_execution_tool(self._registry, self._grpc)
 
     def _register_documentation_tools(self) -> None:
         """Register documentation query tools."""
@@ -187,59 +284,6 @@ Always start by listing available documentation to understand what guidance exis
             print(f"[Worker] Found {len(docs)} documentation entries")
         except Exception:
             print("[Worker] Could not load documentation")
-
-    def _register_single_skill(self, skill) -> None:
-        """Register a single skill as a tool."""
-        skill_id = skill.metadata.skill_id
-        tool_name = f"execute_skill_{skill_id}"
-        description = skill.metadata.description or skill.metadata.capability or f"Execute {skill_id}"
-        
-        # Capture grpc_client in closure
-        grpc = self._grpc
-        
-        def make_handler(skill_map, grpc_client):
-            def handler() -> Dict[str, Any]:
-                from agents.worker.graph import StepExecutor
-                
-                skill_id = skill_map.metadata.skill_id
-                print(f"[Worker] Executing skill: {skill_id}")
-                print(f"[Worker]   Steps: {len(skill_map.steps)}")
-                
-                try:
-                    executor = StepExecutor(grpc_client, dry_run=False)
-                    statuses = executor.execute_skill(skill_map)
-                    success = all(st.success for st in statuses) if statuses else False
-                    
-                    print(f"[Worker]   Result: {'SUCCESS' if success else 'FAILED'}")
-                    for st in statuses:
-                        print(f"[Worker]     Step {st.step_index}: {st.action} - {st.message}")
-                    
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": json.dumps({
-                                "success": success,
-                                "skill_id": skill_id,
-                                "statuses": [st.model_dump() for st in statuses],
-                            })
-                        }]
-                    }
-                except Exception as e:
-                    import traceback
-                    print(f"[Worker]   ERROR: {e}")
-                    traceback.print_exc()
-                    return {
-                        "content": [{"type": "text", "text": f"Error: {str(e)}"}],
-                        "isError": True,
-                    }
-            return handler
-        
-        self._registry.register_tool(
-            name=tool_name,
-            description=description,
-            input_schema={"type": "object", "properties": {}},
-            handler=make_handler(skill, grpc),
-        )
 
     def execute(
         self,

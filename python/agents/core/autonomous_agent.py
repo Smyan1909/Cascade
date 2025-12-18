@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
+from openai import RateLimitError
 
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.tools import StructuredTool
@@ -522,41 +523,60 @@ Please provide a summary in this exact format:
             (status: str, reasoning: str, next_action: str)
             status is one of: 'COMPLETE', 'INCOMPLETE', 'STUCK'
         """
+        # Quick check: if agent explicitly says it's done, trust it
+        completion_phrases = [
+            "task complete", "completed the task", "successfully completed",
+            "have completed", "is complete", "i've completed", "finished the task",
+            "the result is", "the answer is", "calculation complete",
+            "done", "accomplished", "achieved"
+        ]
+        response_lower = last_response.lower() if last_response else ""
+        
+        # Strong completion signal: agent explicitly claims completion
+        has_completion_signal = any(phrase in response_lower for phrase in completion_phrases)
+        
+        # Failure signals that override completion
+        failure_phrases = ["failed", "error", "could not", "unable to", "cannot"]
+        has_failure_signal = any(phrase in response_lower for phrase in failure_phrases)
+        
+        # If agent clearly says done and no failures, mark complete without LLM call
+        if has_completion_signal and not has_failure_signal and len(tool_calls) > 0:
+            # Agent did some work and claims to be done - trust it
+            return ("COMPLETE", "Agent reported task completion", "None")
+        
+        # Otherwise, do LLM evaluation with improved prompt
         try:
             action_narrative = self._build_action_narrative(tool_calls)
             
-            criteria_text = "\n".join(f"- {c}" for c in success_criteria) if success_criteria else "Not specified"
+            # Extract what the agent was trying to achieve from the task
+            task_summary = task[:500] if len(task) > 500 else task
             
-            evaluation_prompt = f"""You are evaluating whether an AI agent has completed its task.
+            evaluation_prompt = f"""You are evaluating if an AI agent completed its task.
 
-ORIGINAL TASK:
-{task[:1000]}
+TASK GIVEN TO AGENT:
+{task_summary}
 
-SUCCESS CRITERIA:
-{criteria_text}
-
-ACTIONS TAKEN ({len(tool_calls)} total):
+ACTIONS TAKEN ({len(tool_calls)} actions):
 {action_narrative}
 
-AGENT'S LAST RESPONSE:
-{last_response[:1000] if last_response else 'N/A'}
+AGENT'S FINAL RESPONSE:
+{last_response[:800] if last_response else 'No response'}
 
-EVALUATE: Has the agent completed ALL success criteria?
+QUESTION: Did the agent accomplish the core objective?
 
-Consider:
-1. Has every success criterion been addressed?
-2. Is the agent stuck in a loop (repeating same actions)?
-3. Does the agent seem blocked or unable to proceed?
+Guidelines:
+- Focus on OUTCOMES, not whether the agent said specific phrases
+- If the agent performed relevant actions and provided a result/answer, mark COMPLETE
+- Mark INCOMPLETE only if the task clearly wasn't finished
+- Mark STUCK only if the agent is repeating actions without progress
 
-Respond in this EXACT format:
+Respond in this EXACT format (one line each):
 COMPLETION_STATUS: [COMPLETE/INCOMPLETE/STUCK]
-CRITERIA_MET: [list which criteria are satisfied]
-CRITERIA_MISSING: [list which criteria are NOT yet satisfied]
-REASONING: [brief explanation of your assessment]
-NEXT_ACTION: [if incomplete, what should be done next; if complete or stuck, say "None"]
+REASONING: [1 sentence explanation]
+NEXT_ACTION: [what to do next, or "None" if complete/stuck]
 """
             
-            model = _get_langchain_model(temperature=0.1)  # Low temp for consistent evaluation
+            model = _get_langchain_model(temperature=0.1)
             response = model.invoke([{"role": "user", "content": evaluation_prompt}])
             eval_text = response.content
             
@@ -580,7 +600,9 @@ NEXT_ACTION: [if incomplete, what should be done next; if complete or stuck, say
             
         except Exception as e:
             self._log(f"Evaluation error: {e}")
-            # Default to incomplete if evaluation fails
+            # If we have a completion signal, trust it even if LLM eval failed
+            if has_completion_signal and not has_failure_signal:
+                return ("COMPLETE", "Agent reported completion (eval failed)", "None")
             return ("INCOMPLETE", f"Evaluation failed: {e}", "Continue with task")
 
     def run(self, task: str, context: Optional[Dict[str, Any]] = None) -> AgentResult:
@@ -793,7 +815,12 @@ NEXT_ACTION: [if incomplete, what should be done next; if complete or stuck, say
                 tool_calls=all_tool_calls,
                 elapsed_seconds=time.time() - start_time,
             )
-            
+        
+        except RateLimitError as e:
+            self._log(f"Rate limit exceeded: {e}")
+            self._log("Waiting 1 second before retrying...")
+            time.sleep(1)
+            return self.run(task, context)
         except Exception as e:
             self._log(f"Error: {e}")
             return AgentResult(

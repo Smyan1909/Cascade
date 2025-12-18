@@ -65,7 +65,7 @@ def main():
     parser.add_argument("--instructions", help="JSON string of instructions", default="{}")
     parser.add_argument("--instructions-file", help="Path to JSON file with instructions (recommended)")
     parser.add_argument("--grpc-endpoint", help="gRPC endpoint (host:port)")
-    parser.add_argument("--max-iterations", type=int, default=100, help="Maximum iterations")
+    parser.add_argument("--max-iterations", type=int, default=1000, help="Maximum iterations")
     parser.add_argument("--auto-approve", action="store_true", help="Skip plan approval step")
     args = parser.parse_args()
 
@@ -85,7 +85,7 @@ def main():
     explorer = HybridExplorer(
         context, 
         grpc_client, 
-        max_verify_iterations=args.max_iterations,
+        max_explore_iterations=args.max_iterations,
         verbose=True,
     )
     result = explorer.explore(
