@@ -390,6 +390,7 @@ The documentation_json should be a JSON string with this format:
             max_iterations=self._max_explore_iterations,
             verbose=self._verbose,
             thread_id=f"explore_{run_id}",
+            enable_verification=True,
         )
         
         explorer_agent = AutonomousAgent(

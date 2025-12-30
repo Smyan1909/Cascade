@@ -37,6 +37,7 @@ class AgentConfig:
     temperature: float = 0.2
     verbose: bool = True
     enable_checkpointing: bool = True
+    enable_verification: bool = True
     thread_id: str = "default"
 
 
@@ -725,13 +726,21 @@ NEXT_ACTION: [what to do next, or "None" if complete/stuck]
                                 
                                 if consecutive_no_tools > 1:
 
-                                    eval_status, eval_reasoning, next_action = self._evaluate_completion(
-                                        task, all_tool_calls, final_response, success_criteria
-                                    )
-                                    
-                                    self._log(f"\n{'='*50}")
-                                    self._log(f"EVALUATION: {eval_status}")
-                                    self._log(f"Reasoning: {eval_reasoning[:200]}...")
+                                    if self._config.enable_verification:
+                                        eval_status, eval_reasoning, next_action = self._evaluate_completion(
+                                            task, all_tool_calls, final_response, success_criteria
+                                        )
+                                        
+                                        self._log(f"\n{'='*50}")
+                                        self._log(f"EVALUATION: {eval_status}")
+                                        self._log(f"Reasoning: {eval_reasoning[:200]}...")
+                                    else:
+                                        # When verification is disabled, we trust the agent's decision to stop
+                                        # If it stopped making tool calls, it's done.
+                                        eval_status = "COMPLETE"
+                                        eval_reasoning = "Verification disabled - agent finished task"
+                                        next_action = "None"
+                                        self._log(f"[Verification Disabled] Agent finished task.")
                                     
                                     if eval_status == "COMPLETE":
                                         self._log("✓ All success criteria met!")

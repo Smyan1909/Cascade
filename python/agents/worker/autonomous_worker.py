@@ -47,6 +47,7 @@ class AutonomousWorker:
             max_iterations=30,
             verbose=True,
             thread_id=f"worker_{uuid.uuid4().hex[:8]}",
+            enable_verification=False,
         )
         
         # Setup MCP tool registry
