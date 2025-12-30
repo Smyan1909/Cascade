@@ -2,6 +2,8 @@
 
 ASP.NET Core gRPC host that implements the Phase 1 contract (`proto/cascade.proto`) and providers for UIA3 (Windows/Java) and Playwright (Web). See `docs/phase2-csharp-body.md` and `docs/00-overview.md` for architecture and data paths.
 
+For the end-to-end architecture (Brain↔Body↔Firestore) and dev rules, see `AGENTS.md`.
+
 ## Run
 - Restore/build: `dotnet build src/Body/Body.csproj`
 - Run: `dotnet run --project src/Body/Body.csproj`
@@ -24,6 +26,15 @@ Values are read from env vars or `appsettings.json`.
 - Providers:
   - UIA3 (FlaUI): launches apps, extracts semantic tree, basic actions (click/type/hover/focus/scroll/wait).
   - Playwright: navigates to URL, extracts DOM interactives, basic actions.
+
+## Code map
+
+For details, see the submodule READMEs:
+- `src/Body/Automation/README.md`
+- `src/Body/Services/README.md`
+- `src/Body/Providers/README.md`
+- `src/Body/Vision/README.md`
+- `src/Body/Configuration/README.md`
 
 ## Testing notes
 - Contract: ensure `proto/cascade.proto` stays in sync; regenerate stubs as part of CI contract tests.

@@ -269,6 +269,9 @@ The documentation_json should be a JSON string with this format:
         instructions: Optional[Dict[str, Any]] = None,
         run_id: Optional[str] = None,
         auto_approve: bool = False,
+        summarized_conversation_history: Optional[str] = None,
+        raw_conversation_history: Optional[List[Dict[str, str]]] = None,
+        iteration_count: int = 0,
     ) -> AgentResult:
         """
         Run autonomous exploration with Plan-Approve-Execute flow.
@@ -307,6 +310,9 @@ The documentation_json should be a JSON string with this format:
             existing_skills=self._existing_skills,
         )
         
+        new_instructions = None
+
+        
         # Display and approve the plan
         print("\n" + "━" * 50)
         print("EXPLORATION PLAN")
@@ -314,7 +320,7 @@ The documentation_json should be a JSON string with this format:
         print(plan_text)
         print("━" * 50)
         
-        if not auto_approve:
+        if not auto_approve and iteration_count == 0:
             # Iterative plan approval with feedback loop
             plan_approved = False
             user_feedback_history: List[str] = []
@@ -367,6 +373,61 @@ The documentation_json should be a JSON string with this format:
                         final_response="Cancelled by user",
                         iterations=0,
                     )
+        # If we're continuing in the same chat session, we need to get new instructions from the user
+        elif iteration_count > 0:
+            new_instructions = input("Enter continuation instructions: ").strip()
+            if new_instructions:
+                self._log(f"Continuation instructions: {new_instructions}")
+
+                # Use LLM to parse/refine user's freeform instructions into proper dict format
+                # (see get_explorer_task signature and prompt format in prompts_autonomous.py)
+                from clients.llm_client import LlmMessage, load_llm_client_from_env
+
+                llm_client = load_llm_client_from_env()
+                system_prompt = (
+                    "You are an assistant that converts freeform user continuation instructions for a UI exploration "
+                    "session into a structured JSON dictionary suitable for an autonomous explorer agent.\n"
+                    "Target format has these optional keys: objective (string), coverage (dict of lists of strings), "
+                    "constraints (list of strings). DO NOT add extra fields.\n"
+                    "Output ONLY a JSON object (no explanation).\n\n"
+                    "Example input:\n"
+                    "User: Instead, focus on accessibility features and find any export and import workflows. Avoid sending emails.\n"
+                    "Example output:\n"
+                    '{\n'
+                    '  "objective": "Find accessibility features and import/export workflows",\n'
+                    '  "coverage": {"features": ["accessibility", "export", "import"]},\n'
+                    '  "constraints": ["Do not send emails"]\n'
+                    '}\n'
+                    "Example input:\n"
+                    "User: Instead, focus on accessibility features and find any export and import workflows. Avoid sending emails.\n"
+                    "Example output:\n"
+                    '{\n'
+                    '  "objective": "Find accessibility features and import/export workflows",\n'
+                    '  "coverage": {"features": ["accessibility", "export", "import"]},\n'
+                    '  "constraints": ["Do not send emails"]\n'
+                    '}\n'
+                )
+
+                messages = [
+                    LlmMessage(role="system", content=system_prompt),
+                    LlmMessage(role="user", content=new_instructions)
+                ]
+                try:
+                    response = llm_client.generate(messages, temperature=0.0, max_tokens=400)
+                    instructions_text = response.content.strip()
+                    try:
+                        # Attempt parsing LLM output as JSON
+                        import json
+                        parsed_instructions = json.loads(instructions_text)
+                        instructions = parsed_instructions
+                    except Exception as parse_err:
+                        self._log(f"[!] Failed to parse LLM output as JSON: {instructions_text}\nError: {parse_err}")
+                        print("[!] Could not parse your instructions into a valid format. Try again.")
+                        instructions = {}
+                except Exception as err:
+                    self._log(f"[!] Error calling LLM for continuation instruction parsing: {err}")
+                    print("[!] Could not process your instructions due to an internal error.")
+                    instructions = {}
         else:
             self._log("Auto-approving plan")
 
@@ -379,12 +440,19 @@ The documentation_json should be a JSON string with this format:
         
         # Create the exploration task with plan context and existing skills
         existing_skills_summary = self._format_existing_skills_summary()
-        task = (
-            f"## Your Exploration Plan\n\n{plan_text}\n\n" +
-            get_explorer_task(app_name, instructions or {}) +
-            existing_skills_summary
-        )
-        
+
+        if iteration_count == 0:
+            task = (
+                f"## Your Exploration Plan\n\n{plan_text}\n\n" +
+                get_explorer_task(app_name, instructions or {}) +
+                existing_skills_summary
+            )
+        else:
+            task = (
+                f"## Continue your exploration plan based on the user's instructions: {new_instructions}\n\n" +
+                get_explorer_task(app_name, instructions or {}) +
+                existing_skills_summary
+            )
         # Create the exploration agent
         config = AgentConfig(
             max_iterations=self._max_explore_iterations,
@@ -397,6 +465,8 @@ The documentation_json should be a JSON string with this format:
             tool_registry=self._registry,
             system_prompt=EXPLORER_SYSTEM_PROMPT,
             config=config,
+            summarized_conversation_history=summarized_conversation_history,
+            raw_conversation_history=raw_conversation_history,
         )
         
         # Run the exploration

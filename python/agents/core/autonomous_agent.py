@@ -47,6 +47,7 @@ class AgentResult:
     status: AgentStatus
     final_response: str
     iterations: int
+    query: Optional[str] = None
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     error: Optional[str] = None
     elapsed_seconds: float = 0.0
@@ -389,17 +390,36 @@ class AutonomousAgent:
         config: Optional[AgentConfig] = None,
         on_tool_call: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         on_tool_result: Optional[Callable[[str, Any], None]] = None,
+        summarized_conversation_history: Optional[str] = None,
+        raw_conversation_history: Optional[List[Dict[str, str]]] = None,
     ):
         self._registry = tool_registry
-        self._system_prompt = system_prompt
+        
         self._config = config or AgentConfig()
         self._on_tool_call = on_tool_call
         self._on_tool_result = on_tool_result
         
+        enhanced_system_promtp = system_prompt
+        
+        if summarized_conversation_history:
+            enhanced_system_promtp += f"\n\nSUMMARIZED CONVERSATION HISTORY: {summarized_conversation_history}"
+        
+        if raw_conversation_history:
+            # Only inject the most recent messages to avoid blowing up the system prompt.
+            # Callers may maintain a longer raw history list for their own bookkeeping.
+            recent_history = raw_conversation_history[-10:]
+            history_text = "\n".join(
+                f"{msg.get('role', 'user').upper()}: {msg.get('content', '')}" for msg in recent_history
+            )
+            enhanced_system_promtp += f"\n\nRAW CONVERSATION HISTORY (Past 10 messages): {history_text}"
+
+        self._system_prompt = enhanced_system_promtp
         self._tools = _convert_mcp_tools_to_langchain(tool_registry)
         self._model = _get_langchain_model(self._config.temperature)
         self._checkpointer = MemorySaver() if self._config.enable_checkpointing else None
         
+        
+
         self._agent = create_agent(
             model=self._model,
             tools=self._tools,
@@ -820,6 +840,7 @@ NEXT_ACTION: [what to do next, or "None" if complete/stuck]
             return AgentResult(
                 status=result_status,
                 final_response=full_summary,
+                query=user_content,
                 iterations=iterations,
                 tool_calls=all_tool_calls,
                 elapsed_seconds=time.time() - start_time,
@@ -835,6 +856,7 @@ NEXT_ACTION: [what to do next, or "None" if complete/stuck]
             return AgentResult(
                 status=AgentStatus.FAILED,
                 final_response="",
+                query=user_content,
                 iterations=iterations,
                 tool_calls=all_tool_calls,
                 error=str(e),

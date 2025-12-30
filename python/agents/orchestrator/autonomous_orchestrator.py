@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from cascade_client.auth.context import CascadeContext
 from cascade_client.grpc_client import CascadeGrpcClient
@@ -179,6 +179,8 @@ Use this to perform actions in an application using available skills or direct a
         self,
         goal: str,
         additional_instructions: str = "",
+        summarized_conversation_history: Optional[str] = None,
+        raw_conversation_history: Optional[List[Dict[str, str]]] = None,
         auto_approve: bool = False,
     ) -> AgentResult:
         """
@@ -259,6 +261,8 @@ Use this to perform actions in an application using available skills or direct a
             tool_registry=self._registry,
             system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
             config=config,
+            summarized_conversation_history=summarized_conversation_history,
+            raw_conversation_history=raw_conversation_history,
         )
         
         # Run the orchestration

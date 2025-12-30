@@ -88,3 +88,17 @@ def load_llm_client_from_env() -> LlmClient:
 
     raise ValueError(f"Unsupported LLM provider: {provider}")
 
+
+def load_summarization_client_from_env() -> LlmClient:
+    """Create a lightweight LLM client for conversation summarization from env configuration."""
+    provider = (os.getenv("CASCADE_SUMMARY_MODEL_PROVIDER") or "openai").lower()
+    model = os.getenv("CASCADE_SUMMARY_MODEL_NAME") or "gpt-4o-mini"
+    api_key = os.getenv("CASCADE_SUMMARY_MODEL_API_KEY") or os.getenv("CASCADE_MODEL_API_KEY")
+    endpoint = os.getenv("CASCADE_SUMMARY_MODEL_ENDPOINT") or os.getenv("CASCADE_MODEL_ENDPOINT")
+
+    if provider == "openai":
+        if not api_key:
+            raise ValueError("CASCADE_SUMMARY_MODEL_API_KEY or CASCADE_MODEL_API_KEY is required for summarization client")
+        return _OpenAIClient(model=model, api_key=api_key, endpoint=endpoint)
+
+    raise ValueError(f"Unsupported summarization LLM provider: {provider}")

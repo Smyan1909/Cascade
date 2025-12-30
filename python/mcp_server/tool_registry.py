@@ -59,8 +59,11 @@ class ToolRegistry:
 
         try:
             result = handler(**arguments)
-            if isinstance(result, dict):
+            # If handler already returns MCP-shaped output, pass through.
+            if isinstance(result, dict) and "content" in result:
                 return result
+
+            # Otherwise, wrap into the MCP tool-call response shape.
             return {"content": [{"type": "text", "text": json.dumps(result)}]}
         except Exception as e:
             return {

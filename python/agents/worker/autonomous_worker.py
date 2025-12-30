@@ -291,6 +291,8 @@ Always start by listing available documentation to understand what guidance exis
         task: str,
         app_name: Optional[str] = None,
         additional_context: str = "",
+        summarized_conversation_history: Optional[str] = None,
+        raw_conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> AgentResult:
         """
         Execute a task using pure ReAct.
@@ -319,6 +321,8 @@ Always start by listing available documentation to understand what guidance exis
             tool_registry=self._registry,
             system_prompt=WORKER_SYSTEM_PROMPT,
             config=self._config,
+            summarized_conversation_history=summarized_conversation_history,
+            raw_conversation_history=raw_conversation_history,
         )
         
         print(f"[Worker] Executing task: {task[:80]}...")

@@ -3,10 +3,12 @@
 import argparse
 import uuid
 from pathlib import Path
+from typing import Dict, List, Optional
 from cascade_client.auth.context import CascadeContext
 from cascade_client.grpc_client import CascadeGrpcClient
 
 import os 
+from agents.core import classify_next_input_intent, summarize_conversation
 
 try:
     from dotenv import load_dotenv
@@ -51,21 +53,65 @@ def main():
     
     print("[Worker] Running in AUTONOMOUS mode")
     worker = AutonomousWorker(context, grpc_client, config)
-    result = worker.execute(
-        task=args.task,
-        app_name=args.app_name,
-    )
-    
-    print("\n" + "=" * 50)
-    print(f"Status: {result.status.value}")
-    print(f"Iterations: {result.iterations}")
-    print(f"Tool Calls: {len(result.tool_calls)}")
-    print(f"Elapsed: {result.elapsed_seconds:.1f}s")
-    if result.error:
-        print(f"Error: {result.error}")
-    print("=" * 50)
-    print("\nFinal Response:")
-    print(result.final_response)
+
+    current_task = args.task
+    additional_context = ""
+    summarized_conversation_history: Optional[str] = None
+    raw_conversation_history: List[Dict[str, str]] = []
+
+    def count_tokens(messages: List[Dict[str, str]]) -> int:
+        # Rough heuristic: 4 chars ≈ 1 token
+        text = "".join(str(msg.get("content", "")) for msg in messages)
+        return len(text.encode("utf-8")) // 4
+
+    while True:
+        result = worker.execute(
+            task=current_task,
+            app_name=args.app_name,
+            additional_context=additional_context,
+            summarized_conversation_history=summarized_conversation_history,
+            raw_conversation_history=raw_conversation_history,
+        )
+
+        print("\n" + "=" * 50)
+        print(f"Status: {result.status.value}")
+        print(f"Iterations: {result.iterations}")
+        print(f"Tool Calls: {len(result.tool_calls)}")
+        print(f"Elapsed: {result.elapsed_seconds:.1f}s")
+        if result.error:
+            print(f"Error: {result.error}")
+        print("=" * 50)
+        print("\nFinal Response:")
+        print(result.final_response)
+
+        # Persist conversation history for long-running workflows.
+        raw_conversation_history.append({"role": "user", "content": current_task + ("\n\n" + additional_context if additional_context else "")})
+        raw_conversation_history.append({"role": "assistant", "content": result.final_response})
+
+        if count_tokens(raw_conversation_history) > 4000:
+            # Summarize BEFORE trimming so we don't lose the dropped context.
+            to_summarize: List[Dict[str, str]] = raw_conversation_history[:]
+            if summarized_conversation_history:
+                to_summarize = [{"role": "system", "content": summarized_conversation_history}] + to_summarize
+            summarized_conversation_history = summarize_conversation(to_summarize)
+            raw_conversation_history = raw_conversation_history[-10:]
+
+        next_input = input("\nEnter next instruction/task (blank to quit): ").strip()
+        if not next_input:
+            break
+
+        decision = classify_next_input_intent(
+            current_objective=current_task,
+            user_input=next_input,
+            summarized_conversation_history=summarized_conversation_history,
+        )
+
+        if decision.intent == "new":
+            current_task = decision.normalized_text
+            additional_context = ""
+        else:
+            # Continuation: keep the same task; treat new input as extra context/refinement.
+            additional_context = decision.normalized_text
 
 
 if __name__ == "__main__":
