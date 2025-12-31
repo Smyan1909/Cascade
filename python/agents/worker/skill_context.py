@@ -40,11 +40,9 @@ def categorize_skill(skill: SkillMap) -> SkillType:
         'web_api' - Web API skill (use call_http_api)
         'native_code' - Native code skill (keep executable)
     """
-    # Check for code artifacts (native code skills)
-    if skill.assets and skill.assets.api_samples:
-        # If there are code samples, this might be a code skill
-        # For now, check if any step has an API endpoint that's not HTTP
-        pass
+    # Explicit code skill linkage (preferred signal)
+    if getattr(skill.metadata, "code_artifact_id", None):
+        return "native_code"
     
     # Check steps for API endpoints
     for step in skill.steps:
@@ -94,14 +92,18 @@ def _format_ui_skill(skill: SkillMap) -> str:
     
     # Steps
     if skill.steps:
-        lines.append("### Steps (use base tools)")
+        lines.append("### Steps (use base tools; routes by selector.platform_source)")
         for i, step in enumerate(skill.steps, 1):
             lines.append(f"{i}. **{step.action}**: {step.step_description or 'No description'}")
             
             if step.selector:
                 selector_info = _format_selector(step.selector)
                 lines.append(f"   - Element: {selector_info}")
-                lines.append(f"   - Use: `click_element` or `type_text` with selector:")
+                if getattr(step.selector, "platform_source", None) and step.selector.platform_source.name == "WEB":
+                    lines.append("   - Use: `click_element` / `type_text` (routes to Playwright automatically for WEB)")
+                    lines.append("   - For complex DOM flows, you may also use `pw_*` tools (e.g., `pw_click`, `pw_fill`, `pw_eval`).")
+                else:
+                    lines.append("   - Use: `click_element` or `type_text` with selector:")
                 lines.append(f"     ```json")
                 lines.append(f"     {json.dumps(_selector_to_dict(step.selector), indent=2)}")
                 lines.append(f"     ```")
@@ -185,7 +187,8 @@ def _format_selector(selector) -> str:
 
 def _selector_to_dict(selector) -> Dict[str, Any]:
     """Convert selector to dict for JSON serialization."""
-    d: Dict[str, Any] = {"platform_source": "WINDOWS"}
+    platform = getattr(selector, "platform_source", None)
+    d: Dict[str, Any] = {"platform_source": platform.name if platform else "WINDOWS"}
     if selector.name:
         d["name"] = selector.name
     if selector.control_type:
@@ -196,6 +199,8 @@ def _selector_to_dict(selector) -> Dict[str, Any]:
         d["path"] = list(selector.path)
     if selector.index is not None:
         d["index"] = selector.index
+    if getattr(selector, "text_hint", None):
+        d["text_hint"] = selector.text_hint
     return d
 
 

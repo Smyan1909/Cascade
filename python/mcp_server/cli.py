@@ -8,6 +8,7 @@ from cascade_client.grpc_client import CascadeGrpcClient
 
 from .body_tools import register_body_tools
 from .explorer_tools import register_explorer_tools
+from .playwright_tools import register_playwright_tools
 from .server import MCPServer
 from .skill_tools import register_skill_tools
 from .tool_registry import ToolRegistry
@@ -32,7 +33,8 @@ def main():
 
     # Setup tool registry
     registry = ToolRegistry()
-    register_body_tools(registry, grpc_client)
+    router = register_body_tools(registry, grpc_client)
+    register_playwright_tools(registry, router)
     register_explorer_tools(registry)
     register_skill_tools(registry, context, grpc_client)
 

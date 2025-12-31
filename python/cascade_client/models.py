@@ -851,3 +851,135 @@ class AgentAck(BaseModel):
             user_id=proto_msg.user_id,
             app_id=proto_msg.app_id,
         )
+
+
+# Code execution models -------------------------------------------------------
+
+
+class CodeFile(BaseModel):
+    """A single source file for execution."""
+
+    path: str
+    content: str
+    language: Optional[str] = None
+
+    def to_proto(self):
+        try:
+            from cascade_client.proto import cascade_pb2
+
+            return cascade_pb2.CodeFile(
+                path=self.path,
+                content=self.content,
+                language=self.language or "",
+            )
+        except ImportError:
+            raise ImportError(
+                "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
+            )
+
+    @classmethod
+    def from_proto(cls, proto_msg) -> "CodeFile":
+        return cls(
+            path=proto_msg.path,
+            content=proto_msg.content,
+            language=proto_msg.language or None,
+        )
+
+
+class CapabilitySpec(BaseModel):
+    """Declared capability required by generated code (used for approvals)."""
+
+    type: str
+    parameters: Dict[str, str] = Field(default_factory=dict)
+    reason: str = ""
+
+    def to_proto(self):
+        try:
+            from cascade_client.proto import cascade_pb2
+
+            return cascade_pb2.CapabilitySpec(
+                type=self.type,
+                parameters=self.parameters,
+                reason=self.reason,
+            )
+        except ImportError:
+            raise ImportError(
+                "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
+            )
+
+    @classmethod
+    def from_proto(cls, proto_msg) -> "CapabilitySpec":
+        return cls(
+            type=proto_msg.type,
+            parameters=dict(proto_msg.parameters),
+            reason=proto_msg.reason,
+        )
+
+
+class CodeExecutionRequest(BaseModel):
+    """Request to execute code via Body (C#) or Brain (Python)."""
+
+    artifact_id: Optional[str] = None
+    language: str
+    skill_id: Optional[str] = None
+    inputs: Dict[str, str] = Field(default_factory=dict)
+    user_id: Optional[str] = None
+    app_id: Optional[str] = None
+    files: List[CodeFile] = Field(default_factory=list)
+    dependencies: List[str] = Field(default_factory=list)
+    capabilities: List[CapabilitySpec] = Field(default_factory=list)
+
+    def to_proto(self):
+        try:
+            from cascade_client.proto import cascade_pb2
+
+            return cascade_pb2.CodeExecutionRequest(
+                artifact_id=self.artifact_id or "",
+                language=self.language,
+                skill_id=self.skill_id or "",
+                inputs=self.inputs,
+                user_id=self.user_id or "",
+                app_id=self.app_id or "",
+                files=[f.to_proto() for f in self.files],
+                dependencies=list(self.dependencies),
+                capabilities=[c.to_proto() for c in self.capabilities],
+            )
+        except ImportError:
+            raise ImportError(
+                "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
+            )
+
+    @classmethod
+    def from_proto(cls, proto_msg) -> "CodeExecutionRequest":
+        return cls(
+            artifact_id=proto_msg.artifact_id or None,
+            language=proto_msg.language,
+            skill_id=proto_msg.skill_id or None,
+            inputs=dict(proto_msg.inputs),
+            user_id=proto_msg.user_id or None,
+            app_id=proto_msg.app_id or None,
+            files=[CodeFile.from_proto(f) for f in getattr(proto_msg, "files", [])],
+            dependencies=list(getattr(proto_msg, "dependencies", [])),
+            capabilities=[
+                CapabilitySpec.from_proto(c)
+                for c in getattr(proto_msg, "capabilities", [])
+            ],
+        )
+
+
+class CodeExecutionResult(BaseModel):
+    """Result from executing code via Body/Brain executor."""
+
+    success: bool
+    output: str = ""
+    error: str = ""
+    execution_time_ms: int = 0
+
+    @classmethod
+    def from_proto(cls, proto_msg) -> "CodeExecutionResult":
+        return cls(
+            success=bool(proto_msg.success),
+            output=proto_msg.output or "",
+            error=proto_msg.error or "",
+            execution_time_ms=int(proto_msg.execution_time_ms or 0),
+        )

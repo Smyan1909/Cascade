@@ -87,6 +87,20 @@ class SkillMetadata(BaseModel):
         description="If True, the application must be in the initial state before executing this skill",
     )
 
+    # Code skill linkage (optional): when present, Worker can execute via execute_code_skill.
+    code_artifact_id: Optional[str] = Field(
+        default=None, description="Code artifact ID associated with this skill"
+    )
+    code_language: Optional[str] = Field(
+        default=None, description="Primary code language/runtime for the artifact (python|csharp)"
+    )
+    code_entrypoint: Optional[str] = Field(
+        default=None, description="Entrypoint for execution (python: module:function; csharp: SkillEntrypoint.Run)"
+    )
+    code_dependencies: List[str] = Field(
+        default_factory=list, description="Dependency hints for code execution (pip/NuGet IDs)"
+    )
+
 class ApiEndpoint(BaseModel):
     """API endpoint description for automation."""
 

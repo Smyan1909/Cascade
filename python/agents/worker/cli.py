@@ -38,6 +38,7 @@ def main():
     parser.add_argument("--skill-id", help="Specific skill ID to use")
     parser.add_argument("--grpc-endpoint", help="gRPC endpoint (host:port)")
     parser.add_argument("--max-iterations", type=int, default=500, help="Maximum iterations (agent decides when done)")
+    parser.add_argument("--auto-approve", action="store_true", help="Skip ALL approval prompts (full access)")
     args = parser.parse_args()
 
     from .autonomous_worker import AutonomousWorker
@@ -52,7 +53,7 @@ def main():
     )
     
     print("[Worker] Running in AUTONOMOUS mode")
-    worker = AutonomousWorker(context, grpc_client, config)
+    worker = AutonomousWorker(context, grpc_client, config, auto_approve=args.auto_approve)
 
     current_task = args.task
     additional_context = ""

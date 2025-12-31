@@ -46,6 +46,7 @@ builder.Services.AddSingleton<OcrService>();
 builder.Services.AddScoped<SessionService>();
 builder.Services.AddScoped<AutomationService>();
 builder.Services.AddScoped<VisionService>();
+builder.Services.AddScoped<CodeExecutionService>();
 builder.Services.AddSingleton<AgentCommService>();
 
 var app = builder.Build();
@@ -53,6 +54,7 @@ var app = builder.Build();
 app.MapGrpcService<SessionService>();
 app.MapGrpcService<AutomationService>();
 app.MapGrpcService<VisionService>();
+app.MapGrpcService<CodeExecutionService>();
 app.MapGrpcService<AgentCommService>();
 
 if (app.Environment.IsDevelopment())

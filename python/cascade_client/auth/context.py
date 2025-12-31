@@ -93,7 +93,7 @@ class CascadeContext(BaseModel):
         Returns:
             Path prefix in format: /artifacts/{app_id}/users/{user_id}
         """
-        return f"artifacts/{self.app_id}/users/{self.user_id}"
+        return f"/artifacts/{self.app_id}/users/{self.user_id}"
 
     def get_skill_map_path(self, skill_id: str) -> str:
         """Get Firestore path for a skill map."""

@@ -100,6 +100,7 @@ def main():
         grpc_client, 
         max_explore_iterations=args.max_iterations,
         verbose=True,
+        auto_approve=args.auto_approve,
     )
     while not is_finished:
         

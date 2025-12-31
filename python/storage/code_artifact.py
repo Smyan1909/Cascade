@@ -22,6 +22,8 @@ class CodeArtifact(BaseModel):
     skill_id: Optional[str] = Field(default=None)
     files: List[CodeFile] = Field(default_factory=list)
     dependencies: List[str] = Field(default_factory=list)
+    # Declared capabilities required to execute this artifact (used for approvals).
+    capabilities: List[Dict[str, Any]] = Field(default_factory=list)
     notes: Optional[str] = None
 
     def to_firestore(self) -> Dict[str, Any]:

@@ -1,9 +1,9 @@
-"""Generate worker/orchestrator code artifacts."""
+"""Generate executable code artifacts for skills (Python or C#)."""
 
 from __future__ import annotations
 
 import uuid
-from typing import List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from storage.code_artifact import CodeArtifact, CodeFile
 from storage.firestore_client import FirestoreClient
@@ -19,13 +19,19 @@ class CodeGenerator:
         self._fs = fs
         self._llm = llm
 
-    def _build_worker_file(self, skill: SkillMap) -> CodeFile:
+    def _build_python_file(self, skill: SkillMap) -> CodeFile:
         lines = [
-            "# Auto-generated worker derived from Skill Map",
+            "# Auto-generated executable skill (Python)",
+            "import os",
             "from cascade_client.grpc_client import CascadeGrpcClient",
             "from cascade_client.models import Action, ActionType",
             "",
-            "def run(client: CascadeGrpcClient, inputs: dict):",
+            "def run(inputs: dict):",
+            "    # Entrypoint executed by Brain Python executor. Uses CASCADE_GRPC_ENDPOINT.",
+            "    endpoint = os.environ.get('CASCADE_GRPC_ENDPOINT')",
+            "    if not endpoint:",
+            "        raise ValueError('CASCADE_GRPC_ENDPOINT is required')",
+            "    client = CascadeGrpcClient(endpoint=endpoint)",
             "    # inputs may contain runtime parameters referenced by steps",
         ]
         for idx, step in enumerate(skill.steps):
@@ -35,7 +41,7 @@ class CodeGenerator:
                 lines.append(
                     f"    # API call to {step.api_endpoint.method} {step.api_endpoint.url}"
                 )
-                lines.append("    # TODO: integrate API call logic with auth/headers")
+                lines.append("    # NOTE: prefer call_http_api tool in Worker when possible.")
                 lines.append("    # response = requests.request(...)")
             elif step.selector:
                 lines.append("    action = Action(")
@@ -47,30 +53,108 @@ class CodeGenerator:
                 lines.append("    client.perform_action(action)")
         lines.append(f"    return 'skill:{skill.metadata.skill_id}'")
         content = "\n".join(lines) + "\n"
-        return CodeFile(path=f"worker_{skill.metadata.skill_id}.py", content=content, language="python")
+        return CodeFile(path=f"skill_{skill.metadata.skill_id}.py", content=content, language="python")
 
-    def _build_orchestrator_file(self, skill: SkillMap) -> CodeFile:
-        content = (
-            "# Auto-generated orchestrator hook\n"
-            "def route(goal: str, skills: list):\n"
-            "    return skills\n"
-        )
-        return CodeFile(path="orchestrator_hooks.py", content=content, language="python")
+    def _build_csharp_file(self, skill: SkillMap) -> CodeFile:
+        content = f"""// Auto-generated executable skill (C#)
+using System;
+using System.Text.Json;
 
-    def generate(self, skill: SkillMap) -> Tuple[str, CodeArtifact]:
+public static class SkillEntrypoint
+{{
+    // Body executes this entrypoint via Roslyn.
+    public static string Run(string inputsJson)
+    {{
+        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(inputsJson) ? "{{}}" : inputsJson);
+        // TODO: Implement native API automation for '{skill.metadata.app_id}' if available.
+        // Fallback remains UI automation via Body tools.
+        return "skill:{skill.metadata.skill_id}";
+    }}
+}}
+"""
+        return CodeFile(path=f"Skill_{skill.metadata.skill_id}.cs", content=content, language="csharp")
+
+    def _choose_language(self, skill: SkillMap, *, preferred: Optional[str]) -> str:
+        if preferred:
+            return preferred.strip().lower()
+        # Heuristic fallback when LLM isn't present:
+        app = (skill.metadata.app_id or "").lower()
+        if any(x in app for x in ("excel", "outlook", "word", "powerpoint")):
+            return "csharp"
+        return "python"
+
+    def _infer_capabilities(self, skill: SkillMap, language: str) -> List[Dict[str, Any]]:
+        caps: List[Dict[str, Any]] = []
+        for step in skill.steps:
+            if step.api_endpoint and step.api_endpoint.url:
+                url = step.api_endpoint.url
+                host = ""
+                try:
+                    from urllib.parse import urlparse
+
+                    host = (urlparse(url).hostname or "").lower()
+                except Exception:
+                    host = ""
+                caps.append(
+                    {"type": "network", "parameters": {"host": host or "unknown"}, "reason": "HTTP API call"}
+                )
+        if any(s.selector is not None for s in skill.steps):
+            caps.append(
+                {"type": "ui_action", "parameters": {"platform": "WINDOWS"}, "reason": "UI automation"}
+            )
+        if language == "csharp":
+            app = (skill.metadata.app_id or "").lower()
+            if "excel" in app:
+                caps.append(
+                    {"type": "com", "parameters": {"prog_id": "Excel.Application"}, "reason": "Excel COM automation"}
+                )
+        return caps
+
+    def generate(
+        self,
+        skill: SkillMap,
+        *,
+        language: Optional[str] = None,
+        notes: str = "",
+    ) -> Tuple[str, CodeArtifact]:
         artifact_id = str(uuid.uuid4())
-        files: List[CodeFile] = [
-            self._build_worker_file(skill),
-            self._build_orchestrator_file(skill),
-        ]
+        chosen = self._choose_language(skill, preferred=language)
+        files: List[CodeFile]
+        dependencies: List[str] = []
+        if chosen == "csharp":
+            files = [self._build_csharp_file(skill)]
+            entrypoint = "SkillEntrypoint.Run"
+        else:
+            files = [self._build_python_file(skill)]
+            entrypoint = f"skill_{skill.metadata.skill_id}:run"
+
         if self._llm:
             try:
                 _ = self._llm.generate(
-                    [LlmMessage(role="system", content="Review generated code for safety.")]
+                    [
+                        LlmMessage(
+                            role="system",
+                            content="Review generated code for safety. Do not add unsafe imports.",
+                        )
+                    ]
                 )
             except Exception:
                 pass
-        artifact = CodeArtifact(skill_id=skill.metadata.skill_id, files=files)
+
+        artifact = CodeArtifact(
+            skill_id=skill.metadata.skill_id,
+            files=files,
+            dependencies=dependencies,
+            capabilities=self._infer_capabilities(skill, chosen),
+            notes=notes or "",
+        )
         self._fs.save_code_artifact(artifact_id, artifact.to_firestore())
+
+        # Link back to the skill metadata (stored alongside the Skill Map).
+        skill.metadata.code_artifact_id = artifact_id
+        skill.metadata.code_language = chosen
+        skill.metadata.code_entrypoint = entrypoint
+        skill.metadata.code_dependencies = dependencies
+
         return artifact_id, artifact
 

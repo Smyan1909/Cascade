@@ -11,6 +11,7 @@ from cascade_client.grpc_client import CascadeGrpcClient
 
 from mcp_server.tool_registry import ToolRegistry
 from mcp_server.body_tools import register_body_tools
+from mcp_server.playwright_tools import register_playwright_tools
 
 from agents.core.autonomous_agent import (
     AgentConfig, AgentResult, AgentStatus, AutonomousAgent
@@ -55,7 +56,8 @@ class TestAgent:
         
         # Setup tool registry with UI interaction tools
         self._registry = ToolRegistry()
-        register_body_tools(self._registry, grpc_client)
+        router = register_body_tools(self._registry, grpc_client)
+        register_playwright_tools(self._registry, router)
         
         # Add explorer tools for observation (get_semantic_tree, get_screenshot)
         from mcp_server.explorer_tools import register_explorer_tools

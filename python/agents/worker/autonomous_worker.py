@@ -11,6 +11,7 @@ from cascade_client.grpc_client import CascadeGrpcClient
 
 from mcp_server.tool_registry import ToolRegistry
 from mcp_server.body_tools import register_body_tools
+from mcp_server.playwright_tools import register_playwright_tools
 from mcp_server.explorer_tools import register_explorer_tools
 from mcp_server.api_tools import register_api_tools, register_code_execution_tool
 
@@ -40,6 +41,7 @@ class AutonomousWorker:
         context: CascadeContext,
         grpc_client: CascadeGrpcClient,
         config: Optional[AgentConfig] = None,
+        auto_approve: bool = False,
     ):
         self._context = context
         self._grpc = grpc_client
@@ -49,11 +51,19 @@ class AutonomousWorker:
             thread_id=f"worker_{uuid.uuid4().hex[:8]}",
             enable_verification=False,
         )
+        self._auto_approve = auto_approve
         
         # Setup MCP tool registry
         self._registry = ToolRegistry()
-        register_body_tools(self._registry, grpc_client)
-        register_explorer_tools(self._registry)
+        from storage.firestore_client import FirestoreClient
+        from agents.core.approvals import ApprovalManager
+
+        fs = FirestoreClient(self._context)
+        self._approvals = ApprovalManager(self._context, fs, auto_approve=self._auto_approve)
+
+        router = register_body_tools(self._registry, grpc_client, approval_manager=self._approvals)
+        register_playwright_tools(self._registry, router)
+        register_explorer_tools(self._registry, approval_manager=self._approvals)
         self._register_skill_context_tools()
         self._register_api_tools()
         self._register_documentation_tools()
@@ -164,8 +174,13 @@ IMPORTANT: Read skills BEFORE executing tasks to understand the right approach."
     
     def _register_api_tools(self) -> None:
         """Register API and code execution tools."""
-        register_api_tools(self._registry)
-        register_code_execution_tool(self._registry, self._grpc)
+        register_api_tools(self._registry, approval_manager=self._approvals)
+        register_code_execution_tool(
+            self._registry,
+            self._grpc,
+            context=self._context,
+            approval_manager=self._approvals,
+        )
 
     def _register_documentation_tools(self) -> None:
         """Register documentation query tools."""

@@ -15,7 +15,8 @@ Code:
 
 - `tool_registry.py`: registers tools with name/description/input schema/handler
 - `server.py`: stdio JSON-RPC server (`initialize`, `tools/list`, `tools/call`)
-- `body_tools.py`: gRPC-backed tools (Session/Automation/Vision)
+- `body_tools.py`: base automation tools (now routed to gRPC/UIA for desktop and Python Playwright for web/electron)
+- `playwright_tools.py`: extended `pw_*` Playwright tools (navigation, selectors, evaluation, etc.)
 - `explorer_tools.py`: persistence helpers (skills/docs)
 - `api_tools.py`: HTTP/API and code execution helper tools
 

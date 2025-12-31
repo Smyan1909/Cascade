@@ -27,6 +27,10 @@ firebase-admin>=6.4.0
 # PDF parsing
 pypdf>=4.0.0
 
+# Playwright (web/electron automation)
+playwright>=1.49.0
+pillow>=10.4.0
+
 # Testing
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
