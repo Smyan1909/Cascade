@@ -141,7 +141,7 @@ def main():
             num_tokens = count_tokens(raw_conversation_history)
             if num_tokens > 4000:
                 # Summarize BEFORE trimming so we don't lose the dropped context.
-                to_summarize = raw_conversation_history[:]
+                to_summarize = raw_conversation_history[-10:]
                 if summarized_conversation_history:
                     to_summarize = [{"role": "system", "content": summarized_conversation_history}] + to_summarize
                 summarized_conversation_history = summarize_conversation(to_summarize)

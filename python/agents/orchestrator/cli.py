@@ -109,7 +109,7 @@ def main():
         raw_conversation_history.append({"role": "assistant", "content": result.final_response})
 
         if count_tokens(raw_conversation_history) > 4000:
-            to_summarize: List[Dict[str, str]] = raw_conversation_history[:]
+            to_summarize: List[Dict[str, str]] = raw_conversation_history[-10:]
             if summarized_conversation_history:
                 to_summarize = [{"role": "system", "content": summarized_conversation_history}] + to_summarize
             summarized_conversation_history = summarize_conversation(to_summarize)
