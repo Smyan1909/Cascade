@@ -12,6 +12,7 @@ from cascade_client.grpc_client import CascadeGrpcClient
 from mcp_server.tool_registry import ToolRegistry
 from mcp_server.body_tools import register_body_tools
 from mcp_server.playwright_tools import register_playwright_tools
+from mcp_server.api_tools import register_api_tools, register_code_execution_tool
 
 from agents.core.autonomous_agent import (
     AgentConfig, AgentResult, AgentStatus, AutonomousAgent
@@ -48,6 +49,10 @@ class HybridExplorer:
         self._max_explore_iterations = max_explore_iterations
         self._verbose = verbose
         self._auto_approve = auto_approve
+
+        # Persist the approved plan across "continue" runs in the same process.
+        # This avoids regenerating a new plan when the user chooses to continue.
+        self._approved_plan_text: Optional[str] = None
         
         # Setup tool registry with all available tools
         self._registry = ToolRegistry()
@@ -64,6 +69,17 @@ class HybridExplorer:
         from mcp_server.explorer_tools import register_explorer_tools
         register_explorer_tools(self._registry, approval_manager=self._approvals)
         self._add_skill_tools()
+
+        # API + native code execution tools (API-first exploration).
+        # - call_http_api: for real HTTP APIs (web services)
+        # - execute_code_skill: for desktop automation via native code (COM/Interop/etc.)
+        register_api_tools(self._registry, approval_manager=self._approvals)
+        register_code_execution_tool(
+            self._registry,
+            self._grpc,
+            context=self._context,
+            approval_manager=self._approvals,
+        )
         
         # Load existing skills to avoid recreating them
         self._existing_skills: List[SkillMap] = []
@@ -371,16 +387,20 @@ Inputs:
         # PHASE 1: STREAMLINED PLANNING
         # =====================================================
         self._log("=== PHASE 1: PLANNING ===")
-        self._log("Creating skill acquisition plan...")
-        
-        # Use streamlined explorer-specific planning
-        from .prompts_autonomous import create_explorer_plan
-        
-        plan_text = create_explorer_plan(
-            app_name=app_name,
-            instructions=instructions or {},
-            existing_skills=self._existing_skills,
-        )
+        if iteration_count == 0 or not self._approved_plan_text:
+            self._log("Creating skill acquisition plan...")
+            # Use streamlined explorer-specific planning
+            from .prompts_autonomous import create_explorer_plan
+
+            plan_text = create_explorer_plan(
+                app_name=app_name,
+                instructions=instructions or {},
+                existing_skills=self._existing_skills,
+            )
+        else:
+            # Continuation: reuse the previously approved plan.
+            self._log("Reusing previously approved exploration plan (continuation)")
+            plan_text = self._approved_plan_text
         
         new_instructions = None
 
@@ -404,6 +424,7 @@ Inputs:
                     
                     if response in ("y", "yes"):
                         plan_approved = True
+                        self._approved_plan_text = plan_text
                         self._log("Plan approved by user")
                     elif response in ("n", "no"):
                         self._log("Plan rejected by user")
@@ -502,6 +523,8 @@ Inputs:
                     instructions = {}
         else:
             self._log("Auto-approving plan")
+            # Persist the plan so future continues reuse it.
+            self._approved_plan_text = plan_text
 
         
         # =====================================================
@@ -521,7 +544,8 @@ Inputs:
             )
         else:
             task = (
-                f"## Continue your exploration plan based on the user's instructions: {new_instructions}\n\n" +
+                f"## Your Existing Exploration Plan (do NOT regenerate)\n\n{plan_text}\n\n" +
+                f"## Continuation Instructions\n\n{new_instructions}\n\n" +
                 get_explorer_task(app_name, instructions or {}) +
                 existing_skills_summary
             )

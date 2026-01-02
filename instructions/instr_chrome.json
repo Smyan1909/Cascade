@@ -1,0 +1,42 @@
+{
+  "objective": "Map Google Chrome workflows for safe browsing automation: navigation, tabs, basic settings, and content interaction without logins or real submissions.",
+  "app_context": "Google Chrome (desktop)",
+  "constraints": [
+    "Use a dedicated test profile if available; do not sign into personal accounts",
+    "Do not enter credentials anywhere; avoid any pages requiring login",
+    "Do not submit forms that send messages, purchases, or real-world requests",
+    "Prefer safe test destinations: about:blank, chrome://settings, https://example.com, https://www.wikipedia.org",
+    "Avoid downloading executables; if download flow is tested, use harmless files only and a dedicated download folder",
+    "Prefer stable UI selectors (omnibox, tab strip, menus); avoid OCR unless necessary"
+  ],
+  "coverage": {
+    "navigation": [
+      "open URL via omnibox",
+      "back/forward/refresh",
+      "new tab and close tab",
+      "switch tabs"
+    ],
+    "page_interaction": [
+      "scroll",
+      "find in page",
+      "copy text selection",
+      "open link in new tab"
+    ],
+    "bookmarks_history": [
+      "bookmark a page",
+      "open bookmarks manager",
+      "view history",
+      "clear in-page search / exit panels"
+    ],
+    "downloads_files": [
+      "open downloads page",
+      "verify a downloaded item appears (only safe files)"
+    ],
+    "settings_safety": [
+      "open settings",
+      "open privacy & security section",
+      "open site settings"
+    ]
+  }
+}
+

@@ -58,7 +58,11 @@ def register_explorer_tools(registry: Any, approval_manager: Optional[Any] = Non
     # API tester
     registry.register_tool(
         name="test_api",
-        description="Test an API endpoint",
+        description="""Test an HTTP API endpoint (network request).
+
+Notes:
+- This tool is for real HTTP APIs (e.g., web services). Desktop apps like Excel typically do NOT expose a localhost HTTP API.
+- For desktop “API-first” automation (COM/Interop/native APIs), use `execute_code_skill` (native code execution) instead.""",
         input_schema={
             "type": "object",
             "properties": {

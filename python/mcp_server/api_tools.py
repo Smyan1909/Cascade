@@ -340,13 +340,30 @@ def _execute_code_skill(
                 ],
             )
             res: CodeExecutionResult = grpc_client.execute_code(req)
+            # Important: res.success means "the code executed" (compiled/invoked).
+            # For automation, we also want a semantic "success" reported by the code itself (if it returns JSON).
+            output_obj: Any = None
+            effective_success = bool(res.success)
+            if res.output:
+                try:
+                    output_obj = json.loads(res.output)
+                    if isinstance(output_obj, dict) and "success" in output_obj:
+                        effective_success = bool(res.success) and bool(output_obj.get("success"))
+                except Exception:
+                    output_obj = None
+
             payload = {
-                "success": res.success,
+                "success": effective_success,
+                "exec_success": res.success,
                 "output": res.output,
+                "output_json": output_obj,
                 "error": res.error,
                 "execution_time_ms": res.execution_time_ms,
             }
-            return {"content": [{"type": "text", "text": json.dumps(payload)}], "isError": not res.success}
+            return {
+                "content": [{"type": "text", "text": json.dumps(payload)}],
+                "isError": not effective_success,
+            }
 
         return {
             "content": [{"type": "text", "text": f"Unsupported code language: {language}"}],

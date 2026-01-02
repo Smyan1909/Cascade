@@ -21,3 +21,15 @@ def test_code_generator_outputs_worker_content():
     assert artifact.files[0].path.endswith("s1.py")
     assert "Step 1" in artifact.files[0].content
 
+
+def test_code_generator_csharp_placeholder_is_not_success():
+    metadata = SkillMetadata(skill_id="s_excel", app_id="excel", user_id="user")
+    step = SkillStep(action="CLICK", selector=None, api_endpoint=None)
+    skill = SkillMap(metadata=metadata, steps=[step])
+    fs = DummyFS()
+    gen = CodeGenerator(fs, llm=None)
+    artifact_id, artifact = gen.generate(skill)
+    assert artifact.files[0].path.endswith("s_excel.cs")
+    # Ensure placeholder can't be mistaken as successful automation.
+    assert "success = false" in artifact.files[0].content
+    assert "NOT_IMPLEMENTED" in artifact.files[0].content

@@ -1,0 +1,46 @@
+{
+  "objective": "Map Microsoft Outlook workflows for reading, searching, organizing mail, and sending safe test replies/messages (self-only).",
+  "app_context": "Microsoft Outlook (desktop)",
+  "constraints": [
+    "COMMUNICATION SAFETY: The only allowed recipient for any send/reply/forward is the signed-in user (send to self only).",
+    "COMMUNICATION SAFETY: Reply ONLY to email threads where the other party is also the signed-in user (self-sent test threads). Never reply to real senders.",
+    "All outbound test messages must include subject prefix: [CASCADE-TEST].",
+    "If instructions explicitly say 'draft', create a draft and DO NOT click Send.",
+    "Do not delete real emails; if cleanup is needed, move only CASCADE-TEST emails to a dedicated folder (e.g., 'Cascade Test').",
+    "Prefer stable UI selectors (folder tree, message list, reading pane, compose window controls)."
+  ],
+  "coverage": {
+    "navigation_reading": [
+      "open Inbox",
+      "open Sent Items",
+      "open a message",
+      "toggle reading pane if needed"
+    ],
+    "search_filter": [
+      "search by subject prefix [CASCADE-TEST]",
+      "filter/sort message list",
+      "clear search"
+    ],
+    "compose_send_safe": [
+      "compose new email to self and send ([CASCADE-TEST])",
+      "reply to a self-sent test email and send ([CASCADE-TEST])",
+      "forward a self-sent test email to self and send ([CASCADE-TEST])"
+    ],
+    "drafts": [
+      "create draft email to self with [CASCADE-TEST] subject and save to Drafts",
+      "open and edit a draft",
+      "send a draft ONLY when explicitly instructed to send"
+    ],
+    "folders_organization": [
+      "create folder 'Cascade Test' (if permitted by account) or use an existing test folder",
+      "move CASCADE-TEST email to test folder",
+      "categorize/flag a CASCADE-TEST email",
+      "mark as read/unread"
+    ],
+    "attachments_safe": [
+      "attach a small local test file from test folder",
+      "verify attachment appears before sending"
+    ]
+  }
+}
+

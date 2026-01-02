@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Threading;
 using System.Text;
 using System.Text.Json;
 using Cascade.Proto;
@@ -109,7 +110,12 @@ public sealed class CodeExecutionService : Proto.CodeExecutionService.CodeExecut
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken);
             cts.CancelAfter(timeout);
 
-            var output = await InvokeWithCapturedConsole(entry, inputsJson, cts.Token).ConfigureAwait(false);
+            // COM automation (Excel/Office/etc.) requires STA threads. If the request declares a COM capability,
+            // run the entrypoint on an STA thread to avoid COM initialization/apartment issues.
+            var requiresSta = request.Capabilities.Any(c =>
+                string.Equals(c.Type, "com", StringComparison.OrdinalIgnoreCase));
+
+            var output = await InvokeWithCapturedConsole(entry, inputsJson, cts.Token, requiresSta).ConfigureAwait(false);
 
             return new CodeExecutionResult
             {
@@ -215,7 +221,7 @@ public sealed class CodeExecutionService : Proto.CodeExecutionService.CodeExecut
         return ps.Length == 1 && ps[0].ParameterType == typeof(string);
     }
 
-    private static async Task<string> InvokeWithCapturedConsole(MethodInfo entry, string inputsJson, CancellationToken ct)
+    private static async Task<string> InvokeWithCapturedConsole(MethodInfo entry, string inputsJson, CancellationToken ct, bool requiresSta)
     {
         var originalOut = Console.Out;
         var originalErr = Console.Error;
@@ -228,7 +234,16 @@ public sealed class CodeExecutionService : Proto.CodeExecutionService.CodeExecut
             Console.SetOut(outWriter);
             Console.SetError(errWriter);
 
-            var invokeTask = Task.Run(() => (string?)entry.Invoke(null, new object?[] { inputsJson }) ?? string.Empty);
+            Task<string> invokeTask;
+            if (!requiresSta)
+            {
+                invokeTask = Task.Run(() => (string?)entry.Invoke(null, new object?[] { inputsJson }) ?? string.Empty);
+            }
+            else
+            {
+                invokeTask = InvokeOnStaThread(entry, inputsJson, ct);
+            }
+
             var completed = await Task.WhenAny(invokeTask, Task.Delay(Timeout.InfiniteTimeSpan, ct)).ConfigureAwait(false);
             if (completed != invokeTask)
             {
@@ -251,6 +266,44 @@ public sealed class CodeExecutionService : Proto.CodeExecutionService.CodeExecut
             Console.SetOut(originalOut);
             Console.SetError(originalErr);
         }
+    }
+
+    private static Task<string> InvokeOnStaThread(MethodInfo entry, string inputsJson, CancellationToken ct)
+    {
+        // Note: this is not a security sandbox. STA is used to support COM automation (Office apps).
+        // Cancellation cannot abort managed code safely; we rely on the server-side timeout and will return a cancellation error.
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var result = (string?)entry.Invoke(null, new object?[] { inputsJson }) ?? string.Empty;
+                tcs.TrySetResult(result);
+            }
+            catch (Exception ex)
+            {
+                tcs.TrySetException(ex);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "Cascade_CodeExec_STA"
+        };
+
+        try
+        {
+            thread.SetApartmentState(ApartmentState.STA);
+        }
+        catch
+        {
+            // If we can't set STA (shouldn't happen on Windows), fall back to MTA invocation.
+        }
+
+        thread.Start();
+
+        // Best-effort cancellation: if ct fires, return cancellation (thread may continue in background).
+        ct.Register(() => tcs.TrySetCanceled(ct));
+        return tcs.Task;
     }
 }
 

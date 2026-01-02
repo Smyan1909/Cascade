@@ -8,7 +8,7 @@ with automatic conversion to/from proto messages.
 from enum import IntEnum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # Enums
@@ -252,6 +252,70 @@ class Selector(BaseModel):
     )
     index: Optional[int] = Field(default=None, description="Index filter")
     text_hint: Optional[str] = Field(default=None, description="Text hint filter")
+
+    @staticmethod
+    def _coerce_int_enum(value: Any, enum_cls: type[IntEnum], *, aliases: Dict[str, str] | None = None) -> IntEnum:
+        """
+        Accept IntEnum instances, ints, numeric strings, or enum-name strings (case-insensitive).
+
+        This is intentionally lenient because LLMs/tool callers commonly emit enum names
+        like "WINDOWS" / "TAB" rather than the underlying numeric values.
+        """
+        if isinstance(value, enum_cls):
+            return value
+
+        if isinstance(value, int):
+            return enum_cls(value)
+
+        if isinstance(value, str):
+            s = value.strip()
+            if s == "":
+                raise ValueError(f"Empty value is not valid for {enum_cls.__name__}")
+
+            # Numeric string (e.g. "1")
+            if s.isdigit() or (s.startswith("-") and s[1:].isdigit()):
+                return enum_cls(int(s))
+
+            key = s.upper()
+            if aliases and key in aliases:
+                key = aliases[key]
+
+            try:
+                return enum_cls[key]  # type: ignore[index]
+            except KeyError as e:
+                allowed = ", ".join([m.name for m in enum_cls])  # type: ignore[arg-type]
+                raise ValueError(
+                    f"Invalid {enum_cls.__name__} '{value}'. Allowed: {allowed}"
+                ) from e
+
+        raise TypeError(f"Invalid type for {enum_cls.__name__}: {type(value).__name__}")
+
+    @field_validator("platform_source", mode="before")
+    @classmethod
+    def _validate_platform_source(cls, v: Any) -> Any:
+        return cls._coerce_int_enum(
+            v,
+            PlatformSource,
+            aliases={
+                "WIN": "WINDOWS",
+                "WINDOWS_UIA": "WINDOWS",
+            },
+        )
+
+    @field_validator("control_type", mode="before")
+    @classmethod
+    def _validate_control_type(cls, v: Any) -> Any:
+        if v is None:
+            return None
+        return cls._coerce_int_enum(
+            v,
+            ControlType,
+            aliases={
+                "LIST_ITEM": "LISTITEM",
+                "TABITEM": "TAB",
+                "TAB_ITEM": "TAB",
+            },
+        )
 
     @classmethod
     def from_proto(cls, proto_msg) -> "Selector":

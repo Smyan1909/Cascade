@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -55,23 +56,91 @@ class CodeGenerator:
         content = "\n".join(lines) + "\n"
         return CodeFile(path=f"skill_{skill.metadata.skill_id}.py", content=content, language="python")
 
-    def _build_csharp_file(self, skill: SkillMap) -> CodeFile:
-        content = f"""// Auto-generated executable skill (C#)
+    def _csharp_placeholder(self) -> str:
+        # IMPORTANT: This must return success=false so the agent cannot treat "compiled + executed" as task success.
+        return """// Auto-generated executable skill (C#)
 using System;
 using System.Text.Json;
 
 public static class SkillEntrypoint
-{{
+{
     // Body executes this entrypoint via Roslyn.
+    // This is a placeholder for native API automation.
     public static string Run(string inputsJson)
-    {{
-        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(inputsJson) ? "{{}}" : inputsJson);
-        // TODO: Implement native API automation for '{skill.metadata.app_id}' if available.
-        // Fallback remains UI automation via Body tools.
-        return "skill:{skill.metadata.skill_id}";
-    }}
-}}
+    {
+        using var _ = JsonDocument.Parse(string.IsNullOrWhiteSpace(inputsJson) ? "{}" : inputsJson);
+        return JsonSerializer.Serialize(new {
+            success = false,
+            error = new {
+                code = "NOT_IMPLEMENTED",
+                message = "No native implementation generated for this skill. Use UI automation steps instead."
+            }
+        });
+    }
+}
 """
+
+    def _generate_csharp_via_llm(self, skill: SkillMap) -> Optional[str]:
+        """Generate C# code for this skill via the configured LLM.
+
+        Returns:
+            Code string, or None if generation failed.
+        """
+        if not self._llm:
+            return None
+
+        # Provide the skill in a structured form. Avoid dumping huge trees.
+        payload = skill.model_dump(mode="json")
+        # Trim potentially large fields if they exist (defensive).
+        payload.get("metadata", {}).pop("initial_state_tree", None)
+        skill_json = json.dumps(payload, indent=2)
+
+        system = """You generate a SINGLE C# source file implementing a Cascade code artifact for desktop automation.
+
+Hard requirements:
+- Output ONLY C# code (no markdown, no code fences).
+- Must define: public static class SkillEntrypoint { public static string Run(string inputsJson) { ... } }
+- Run must return a JSON string. Top-level must include: { "success": true|false }.
+- If you cannot implement safely, return success=false with an error object.
+
+Safety constraints (Body will reject or fail):
+- Do NOT use System.IO, System.Net, Process/ProcessStartInfo.
+- Avoid spawning processes, file reads/writes, or network.
+- You MAY use COM automation via dynamic + Marshal.GetActiveObject/Activator.CreateInstance, and System.Runtime.InteropServices.
+
+Behavior requirements:
+- Parse inputsJson (JSON) and use it to drive the automation.
+- Prefer attaching to existing app instance when possible.
+- Be robust: validate required inputs; on missing/invalid inputs, return success=false with a helpful error message.
+"""
+
+        user = f"""Generate the code artifact for this SkillMap (JSON below). The artifact should implement THIS ONE skill only.
+
+SkillMap JSON:
+{skill_json}
+"""
+
+        try:
+            resp = self._llm.generate(
+                [LlmMessage(role="system", content=system), LlmMessage(role="user", content=user)],
+                temperature=0.1,
+                max_tokens=1200,
+            )
+            code = (resp.content or "").strip()
+            if not code:
+                return None
+            # Defensive stripping if the model included fenced blocks anyway.
+            if code.startswith("```"):
+                code = code.strip("`")
+                code = code.replace("csharp", "", 1).strip()
+            if "class SkillEntrypoint" not in code or "Run(string inputsJson" not in code:
+                return None
+            return code
+        except Exception:
+            return None
+
+    def _build_csharp_file(self, skill: SkillMap) -> CodeFile:
+        content = self._generate_csharp_via_llm(skill) or self._csharp_placeholder()
         return CodeFile(path=f"Skill_{skill.metadata.skill_id}.cs", content=content, language="csharp")
 
     def _choose_language(self, skill: SkillMap, *, preferred: Optional[str]) -> str:
@@ -128,18 +197,8 @@ public static class SkillEntrypoint
             files = [self._build_python_file(skill)]
             entrypoint = f"skill_{skill.metadata.skill_id}:run"
 
-        if self._llm:
-            try:
-                _ = self._llm.generate(
-                    [
-                        LlmMessage(
-                            role="system",
-                            content="Review generated code for safety. Do not add unsafe imports.",
-                        )
-                    ]
-                )
-            except Exception:
-                pass
+        # NOTE: C# code generation may use LLM directly in _build_csharp_file. We intentionally avoid a
+        # separate "review pass" here to keep generation deterministic and testable in fallback mode.
 
         artifact = CodeArtifact(
             skill_id=skill.metadata.skill_id,
