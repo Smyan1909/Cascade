@@ -100,7 +100,7 @@ At a high level:
   - `ResumeWorkerRun(...) -> stream WorkerEvent`
 - **AgentCommService** (A2A): at-least-once inbox delivery
   - `RegisterAgent`, `SendAgentMessage`, `StreamAgentInbox`, `AckAgentMessage`
-- **CodeExecutionService**: execute code artifacts (future/optional path)
+- (removed) CodeExecutionService: programmatic automation is executed via sandboxed Python, not Body code execution
 
 ### Implementations and clients
 

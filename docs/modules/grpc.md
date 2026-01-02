@@ -22,7 +22,7 @@ Brain-implemented service:
 - **WorkerService**: server-streaming execution events (`StartWorkerRun`, `ResumeWorkerRun`)
 
 Optional/future:
-- **CodeExecutionService**: execute a stored code artifact via the Body
+- (removed) CodeExecutionService: code execution is not part of the Body gRPC surface in this repo version
 
 ## Selector model (why it matters)
 

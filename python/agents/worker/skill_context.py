@@ -1,8 +1,7 @@
 """Skill context formatting for Worker agent.
 
 This module handles loading, categorizing, and formatting skills as context
-for the Worker agent. UI and Web API skills become instructional context;
-native code skills remain executable.
+for the Worker agent.
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ from storage.firestore_client import FirestoreClient
 from agents.explorer.skill_map import SkillMap, SkillStep
 
 
-SkillType = Literal["ui", "web_api", "native_code"]
+SkillType = Literal["ui", "web_api", "python_sandbox"]
 
 
 def load_all_skills(context: CascadeContext, fs: Optional[FirestoreClient] = None) -> List[SkillMap]:
@@ -38,11 +37,11 @@ def categorize_skill(skill: SkillMap) -> SkillType:
     Returns:
         'ui' - UI automation skill (use base tools)
         'web_api' - Web API skill (use call_http_api)
-        'native_code' - Native code skill (keep executable)
+        'python_sandbox' - Programmatic file automation executed in sandbox
     """
-    # Explicit code skill linkage (preferred signal)
-    if getattr(skill.metadata, "code_artifact_id", None):
-        return "native_code"
+    # Sandbox programmatic automation (preferred over UI).
+    if getattr(skill.metadata, "sandbox", None) is not None:
+        return "python_sandbox"
     
     # Check steps for API endpoints
     for step in skill.steps:
@@ -50,8 +49,6 @@ def categorize_skill(skill: SkillMap) -> SkillType:
             url = step.api_endpoint.url.lower() if step.api_endpoint.url else ""
             if url.startswith("http://") or url.startswith("https://"):
                 return "web_api"
-            # Non-HTTP API (could be native code path)
-            return "native_code"
     
     # Default to UI skill
     return "ui"
@@ -70,7 +67,7 @@ def format_skill_as_context(skill: SkillMap) -> str:
     elif skill_type == "web_api":
         return _format_web_api_skill(skill)
     else:
-        return _format_code_skill(skill)
+        return _format_sandbox_skill(skill)
 
 
 def _format_ui_skill(skill: SkillMap) -> str:
@@ -152,19 +149,51 @@ def _format_web_api_skill(skill: SkillMap) -> str:
     return "\n".join(lines)
 
 
-def _format_code_skill(skill: SkillMap) -> str:
-    """Format native code skill (these remain executable)."""
+def _format_sandbox_skill(skill: SkillMap) -> str:
+    """Format sandbox skill (executed via E2B copy-in/run/copy-out)."""
+    sb = getattr(skill.metadata, "sandbox", None)
     lines = [
         f"## Skill: {skill.metadata.skill_id}",
-        f"**Type**: Native Code (Executable)",
+        f"**Type**: Python Sandbox (E2B)",
         f"**Capability**: {skill.metadata.capability or 'N/A'}",
         f"**Description**: {skill.metadata.description or 'N/A'}",
         "",
-        "> This skill runs native code (e.g., C# via Roslyn).",
-        "> Use `execute_code_skill` tool to run it directly.",
+        "> This skill runs programmatic file automation in a sandboxed Python environment.",
+        "> Use `execute_sandbox_skill` tool to run it (copy-in/run/copy-out).",
         "",
     ]
-    
+
+    if sb is None:
+        lines.append("> ERROR: Skill is categorized as python_sandbox but metadata.sandbox is missing.")
+        return "\n".join(lines)
+
+    if getattr(sb, "python_packages", None):
+        lines.append("### Required Python Packages")
+        for pkg in sb.python_packages:
+            lines.append(f"- `{pkg}`")
+        lines.append("")
+
+    if getattr(sb, "functions", None):
+        lines.append("### Key Functions")
+        for k, fn in sb.functions.items():
+            lines.append(f"- **{k}**: `{fn.module}.{fn.function}` {('- ' + fn.description) if fn.description else ''}".rstrip())
+        lines.append("")
+
+    fio = getattr(sb, "file_io", None)
+    if fio is not None:
+        if getattr(fio, "inputs", None):
+            lines.append("### File Inputs")
+            for f in fio.inputs:
+                req = "required" if f.required else "optional"
+                lines.append(f"- `{f.name}`: `{f.file_glob}` ({req})")
+            lines.append("")
+        if getattr(fio, "outputs", None):
+            lines.append("### File Outputs")
+            for f in fio.outputs:
+                req = "required" if f.required else "optional"
+                lines.append(f"- `{f.name}`: `{f.file_glob}` ({req})")
+            lines.append("")
+
     if skill.metadata.inputs:
         lines.append("### Required Inputs")
         for key, val in skill.metadata.inputs.items():
@@ -219,5 +248,5 @@ def get_skill_summaries(skills: List[SkillMap]) -> List[Dict[str, str]]:
 
 
 def get_executable_skills(skills: List[SkillMap]) -> List[SkillMap]:
-    """Return only native code skills that need executable registration."""
-    return [s for s in skills if categorize_skill(s) == "native_code"]
+    """Return sandbox skills (these are executed via execute_sandbox_skill)."""
+    return [s for s in skills if categorize_skill(s) == "python_sandbox"]

@@ -1,6 +1,5 @@
-"""Shared storage helpers (Firestore, code artifacts, vector store)."""
+"""Shared storage helpers (Firestore, vector store)."""
 
 from .firestore_client import FirestoreClient  # noqa: F401
-from .code_artifact import CodeArtifact  # noqa: F401
 from .vector_store import InMemoryVectorStore  # noqa: F401
 

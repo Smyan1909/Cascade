@@ -62,7 +62,7 @@ def register_explorer_tools(registry: Any, approval_manager: Optional[Any] = Non
 
 Notes:
 - This tool is for real HTTP APIs (e.g., web services). Desktop apps like Excel typically do NOT expose a localhost HTTP API.
-- For desktop “API-first” automation (COM/Interop/native APIs), use `execute_code_skill` (native code execution) instead.""",
+- For programmatic desktop file automation, create a Python Sandbox skill and execute via `execute_sandbox_skill` instead.""",
         input_schema={
             "type": "object",
             "properties": {

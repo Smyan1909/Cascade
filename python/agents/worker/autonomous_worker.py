@@ -13,7 +13,8 @@ from mcp_server.tool_registry import ToolRegistry
 from mcp_server.body_tools import register_body_tools
 from mcp_server.playwright_tools import register_playwright_tools
 from mcp_server.explorer_tools import register_explorer_tools
-from mcp_server.api_tools import register_api_tools, register_code_execution_tool
+from mcp_server.api_tools import register_api_tools
+from mcp_server.sandbox_tools import register_sandbox_tools
 
 from agents.core.autonomous_agent import AutonomousAgent, AgentConfig, AgentResult
 from agents.worker.prompts_autonomous import WORKER_SYSTEM_PROMPT, get_worker_task
@@ -66,6 +67,7 @@ class AutonomousWorker:
         register_explorer_tools(self._registry, approval_manager=self._approvals)
         self._register_skill_context_tools()
         self._register_api_tools()
+        self._register_sandbox_tools()
         self._register_documentation_tools()
 
     def _register_skill_context_tools(self) -> None:
@@ -134,7 +136,7 @@ class AutonomousWorker:
 Returns summaries of skills with their types:
 - UI: Use base tools (click_element, type_text) guided by skill instructions
 - WEB_API: Use call_http_api tool with skill endpoint details
-- NATIVE_CODE: Use execute_code_skill for C#/Roslyn automation
+- PYTHON_SANDBOX: Use execute_sandbox_skill for sandboxed programmatic file automation
 
 Call read_skill(skill_id) to get detailed instructions for a specific skill.""",
             input_schema={"type": "object", "properties": {}},
@@ -149,7 +151,7 @@ Call read_skill(skill_id) to get detailed instructions for a specific skill.""",
 Returns step-by-step guidance on how to execute the skill:
 - For UI skills: Shows which elements to interact with and selectors to use
 - For API skills: Shows endpoints, methods, and parameters
-- For code skills: Shows how to call execute_code_skill
+- For sandbox skills: Shows how to call execute_sandbox_skill
 
 IMPORTANT: Read skills BEFORE executing tasks to understand the right approach.""",
             input_schema={
@@ -173,14 +175,12 @@ IMPORTANT: Read skills BEFORE executing tasks to understand the right approach."
             print(f"[Worker] Could not load skills: {e}")
     
     def _register_api_tools(self) -> None:
-        """Register API and code execution tools."""
+        """Register API tools."""
         register_api_tools(self._registry, approval_manager=self._approvals)
-        register_code_execution_tool(
-            self._registry,
-            self._grpc,
-            context=self._context,
-            approval_manager=self._approvals,
-        )
+
+    def _register_sandbox_tools(self) -> None:
+        """Register sandbox execution tools (E2B)."""
+        register_sandbox_tools(self._registry, context=self._context, approval_manager=self._approvals)
 
     def _register_documentation_tools(self) -> None:
         """Register documentation query tools."""

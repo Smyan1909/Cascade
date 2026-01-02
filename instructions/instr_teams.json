@@ -1,6 +1,11 @@
 {
   "objective": "Map Microsoft Teams workflows for safe messaging and navigation, restricted to self-chat only.",
   "app_context": "Microsoft Teams (desktop)",
+  "automation_hierarchy": [
+    "If a cloud/web API exists for the task, use that (WEB_API skill).",
+    "If no API exists but the task is a safe file transform, create a Python Sandbox skill (metadata.sandbox) and run it in E2B.",
+    "If neither exists, fall back to UI automation via clicking/typing."
+  ],
   "constraints": [
     "COMMUNICATION SAFETY: Only use self-chat. Do not message any other user, group chat, channel, or external contact.",
     "All outbound test messages must start with prefix: [CASCADE-TEST].",

@@ -15,14 +15,14 @@ skills for an app. Always query them at runtime:
 Prefer API-based automation over UI automation wherever possible.
 
 When planning:
-- Prefer existing WEB_API or NATIVE_CODE skills over UI skills.
+- Prefer existing WEB_API or PYTHON_SANDBOX skills over UI skills.
 - If required capabilities are missing, instruct Explorer to prioritize discovering API endpoints first (and only then fall back to UI mapping).
 - When executing tasks, direct Worker to try API routes first and use UI only as fallback.
 
 ## What to ask Explorer/Worker for (skill shapes)
 - **WEB_API skills**: Skills whose steps include an `api_endpoint` (HTTP method + URL). Worker will execute via `call_http_api`.
-- **NATIVE_CODE skills (desktop API-first)**: Skills with `metadata.code_artifact_id`/`code_language`/`code_entrypoint`.
-  Worker will execute via `execute_code_skill`. This is the preferred way to automate desktop apps like Excel/Outlook without brittle UI clicking.
+- **PYTHON_SANDBOX skills (programmatic file automation)**: Skills with `metadata.sandbox` describing Python packages + function mapping + file IO.
+  Worker will execute via `execute_sandbox_skill`. This is preferred when the task is a file transform and no cloud API exists.
 
 ## How You Work: Plan → Execute → Verify → (Replan)
 

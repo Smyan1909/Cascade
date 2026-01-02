@@ -1,6 +1,11 @@
 {
   "objective": "Map Google Chrome workflows for safe browsing automation: navigation, tabs, basic settings, and content interaction without logins or real submissions.",
   "app_context": "Google Chrome (desktop)",
+  "automation_hierarchy": [
+    "If a web API exists for the task, use that (WEB_API skill).",
+    "If no API exists but the task can be performed programmatically on files, create a Python Sandbox skill (metadata.sandbox) and run it in E2B.",
+    "If neither exists, fall back to UI automation via clicking/typing."
+  ],
   "constraints": [
     "Use a dedicated test profile if available; do not sign into personal accounts",
     "Do not enter credentials anywhere; avoid any pages requiring login",

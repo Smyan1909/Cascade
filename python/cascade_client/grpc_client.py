@@ -20,8 +20,6 @@ from cascade_client.models import (
     AgentMessage,
     AgentRegisterRequest,
     AgentRegisterResponse,
-    CodeExecutionRequest,
-    CodeExecutionResult,
     SemanticTree,
     StartAppRequest,
     Status,
@@ -75,7 +73,6 @@ class CascadeGrpcClient:
     DEADLINE_SESSION = 30.0  # Medium deadline for session operations
     DEADLINE_WORKER = 300.0  # Longer deadline for worker streams
     DEADLINE_A2A = 120.0  # Agent-to-agent streams/operations
-    DEADLINE_CODE_EXEC = 120.0  # Code execution can be slower (compile + run)
 
     # Retry configuration
     MAX_RETRIES = 3
@@ -120,7 +117,6 @@ class CascadeGrpcClient:
         self._vision_stub: Optional[cascade_pb2_grpc.VisionServiceStub] = None
         self._worker_stub: Optional[cascade_pb2_grpc.WorkerServiceStub] = None
         self._agent_stub: Optional[cascade_pb2_grpc.AgentCommServiceStub] = None
-        self._code_exec_stub: Optional[cascade_pb2_grpc.CodeExecutionServiceStub] = None
 
     def _get_channel(self) -> grpc.Channel:
         """Get or create gRPC channel (lazy initialization)."""
@@ -189,17 +185,6 @@ class CascadeGrpcClient:
             )
         return self._agent_stub
 
-    def _get_code_exec_stub(self):
-        """Get or create code execution service stub."""
-        if cascade_pb2_grpc is None:
-            raise ImportError(
-                "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
-            )
-        if self._code_exec_stub is None:
-            self._code_exec_stub = cascade_pb2_grpc.CodeExecutionServiceStub(
-                self._get_channel()
-            )
-        return self._code_exec_stub
 
     def _is_retryable_error(self, error: grpc.RpcError) -> bool:
         """Check if error is retryable."""
@@ -520,19 +505,6 @@ class CascadeGrpcClient:
 
         proto_response = self._retry_call(_call, self.DEADLINE_SCREENSHOT)
         return proto_response
-
-    # Code Execution Service - Sync
-    def execute_code(self, request: CodeExecutionRequest) -> CodeExecutionResult:
-        """Execute inline/native code via the Body CodeExecutionService (sync)."""
-        proto_request = request.to_proto()
-
-        def _call():
-            return self._get_code_exec_stub().ExecuteCode(
-                proto_request, timeout=self.DEADLINE_CODE_EXEC
-            )
-
-        proto_response = self._retry_call(_call, self.DEADLINE_CODE_EXEC)
-        return CodeExecutionResult.from_proto(proto_response)
 
     # Vision Service - Async
     async def get_marked_screenshot_async(self):

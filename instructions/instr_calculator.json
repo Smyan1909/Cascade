@@ -1,6 +1,11 @@
 {
   "objective": "Map every capability of the Windows Calculator app so workers can perform any calculation.",
   "app_context": "Windows Calculator",
+  "automation_hierarchy": [
+    "If a direct API exists for the task, use that (WEB_API skill).",
+    "If no API exists but the task is a safe file transform, create a Python Sandbox skill (metadata.sandbox) and run it in E2B.",
+    "If neither exists, fall back to UI automation via clicking/typing."
+  ],
   "constraints": [
     "Be nondestructive; do not change system settings",
     "Prefer stable UI selectors; avoid OCR unless necessary"

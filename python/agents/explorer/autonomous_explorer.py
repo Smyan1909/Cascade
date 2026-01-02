@@ -12,7 +12,7 @@ from cascade_client.grpc_client import CascadeGrpcClient
 from mcp_server.tool_registry import ToolRegistry
 from mcp_server.body_tools import register_body_tools
 from mcp_server.playwright_tools import register_playwright_tools
-from mcp_server.api_tools import register_api_tools, register_code_execution_tool
+from mcp_server.api_tools import register_api_tools
 
 from agents.core.autonomous_agent import (
     AgentConfig, AgentResult, AgentStatus, AutonomousAgent
@@ -70,16 +70,8 @@ class HybridExplorer:
         register_explorer_tools(self._registry, approval_manager=self._approvals)
         self._add_skill_tools()
 
-        # API + native code execution tools (API-first exploration).
-        # - call_http_api: for real HTTP APIs (web services)
-        # - execute_code_skill: for desktop automation via native code (COM/Interop/etc.)
+        # API tools (API-first exploration for cloud/web services).
         register_api_tools(self._registry, approval_manager=self._approvals)
-        register_code_execution_tool(
-            self._registry,
-            self._grpc,
-            context=self._context,
-            approval_manager=self._approvals,
-        )
         
         # Load existing skills to avoid recreating them
         self._existing_skills: List[SkillMap] = []
@@ -89,8 +81,6 @@ class HybridExplorer:
         """Add skill map and documentation saving tools for the explorer agent."""
         from storage.firestore_client import FirestoreClient
         from .documentation_map import DocumentationMap
-        from .code_generator import CodeGenerator
-        from clients.llm_client import load_llm_client_from_env
         
         fs = FirestoreClient(self._context)
         context = self._context  # Capture for closure
@@ -147,46 +137,6 @@ class HybridExplorer:
                     "isError": True
                 }
 
-        def generate_code_artifact(skill_id: str, language: str = "") -> Dict[str, Any]:
-            """Generate and attach a code artifact for an existing skill map."""
-            try:
-                raw = fs.get_skill_map(skill_id)
-                if not raw:
-                    return {
-                        "content": [{"type": "text", "text": f"Skill '{skill_id}' not found."}],
-                        "isError": True,
-                    }
-                skill = SkillMap.model_validate(raw)
-
-                llm = None
-                try:
-                    llm = load_llm_client_from_env()
-                except Exception:
-                    llm = None
-
-                gen = CodeGenerator(fs, llm=llm)
-                artifact_id, artifact = gen.generate(skill, language=(language or None))
-
-                # Persist updated skill map linkage.
-                fs.upsert_skill_map(skill)
-
-                return {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": (
-                                f"Generated code artifact {artifact_id} for skill {skill_id} "
-                                f"(language={skill.metadata.code_language}, entrypoint={skill.metadata.code_entrypoint})."
-                            ),
-                        }
-                    ]
-                }
-            except Exception as e:
-                return {
-                    "content": [{"type": "text", "text": f"Error generating code artifact: {str(e)}"}],
-                    "isError": True,
-                }
-        
         self._registry.register_tool(
             name="save_skill_map",
             description="""Save a skill map to storage. The skill_map_json should be a JSON string with this format:
@@ -261,26 +211,6 @@ The documentation_json should be a JSON string with this format:
                 "required": ["documentation_json"]
             },
             handler=lambda documentation_json: save_documentation(documentation_json),
-        )
-
-        self._registry.register_tool(
-            name="generate_code_artifact",
-            description="""Generate a code artifact for a saved skill and attach it to the Skill Map metadata.
-
-Use when the skill should be executed via native API automation (Python or C#) instead of UI steps.
-
-Inputs:
-- skill_id: skill to attach code to
-- language: optional 'python' or 'csharp'. If omitted, generator uses heuristics (and may use LLM if configured).""",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "skill_id": {"type": "string", "description": "Skill ID"},
-                    "language": {"type": "string", "description": "Optional: python|csharp"},
-                },
-                "required": ["skill_id"],
-            },
-            handler=lambda skill_id, language="": generate_code_artifact(skill_id, language),
         )
 
     def _load_existing_skills(self) -> None:

@@ -16,14 +16,12 @@ Always start by calling:
 Always prefer API-based automation over manual UI automation when possible.
 
 Before clicking/typing in the UI, you MUST:
-- Check whether an API-based skill exists (type: WEB_API) for the capability.
-- If documentation or skill context provides an endpoint, prefer `call_http_api` first.
-- Only fall back to UI tools (click/type) when:
-  - No API endpoint is available, or
-  - The API call is blocked/denied by approvals, or
-  - The API path is unreliable (fails repeatedly) and UI is the only workable path.
+- Check whether a WEB_API skill exists for the capability.
+- If so, prefer `call_http_api` first.
+- If no API exists, check for a Python Sandbox skill (programmatic file automation) and use `execute_sandbox_skill`.
+- Only fall back to UI tools (click/type) when neither API nor programmatic option exists (or when denied by approvals).
 
-## What "API" and "Code" skills look like (Skill Map shapes)
+## What "API" and "Programmatic" skills look like (Skill Map shapes)
 
 ### WEB_API skill (HTTP)
 - A WEB_API skill will include a step with an `api_endpoint` describing the HTTP request.
@@ -50,21 +48,26 @@ Example (shape only):
 }
 ```
 
-### NATIVE_CODE skill (desktop “API-first”)
-- Desktop apps usually do NOT have a localhost HTTP API.
-- “API-first” for desktop typically means native automation (COM/Interop/Win32) via a code artifact attached to the skill:
-  - `metadata.code_artifact_id`, `metadata.code_language`, `metadata.code_entrypoint`
-- You execute it with `execute_code_skill(skill_id, ...)`.
+### PYTHON_SANDBOX skill (programmatic file automation)
+- Use when the task can be done by editing files programmatically (e.g., `.xlsx` with `openpyxl`).
+- A sandbox skill has `metadata.sandbox` describing required pip packages and key functions.
+- You execute it with `execute_sandbox_skill(skill_id, files=[...], inputs={...})`.
+  - You may omit `python_code`; the tool will generate sandbox Python automatically using the configured Cascade LLM.
 
 Example (shape only):
 ```json
 {
   "metadata": {
-    "skill_id": "excel_write_cell_native",
-    "preferred_method": "api",
-    "code_artifact_id": "4b0c2a3e-....",
-    "code_language": "csharp",
-    "code_entrypoint": "SkillEntrypoint.Run"
+    "skill_id": "excel_update_cell_sandbox",
+    "preferred_method": "sandbox",
+    "sandbox": {
+      "provider": "e2b",
+      "python_packages": ["openpyxl"],
+      "functions": {
+        "open_workbook": {"module": "openpyxl", "function": "load_workbook"},
+        "save_workbook": {"module": "openpyxl.workbook.workbook", "function": "save"}
+      }
+    }
   }
 }
 ```
@@ -117,8 +120,8 @@ Use the appropriate tools based on skill type:
 **For Web API Skills** (type: WEB_API):
 - Use `call_http_api` with endpoint details from skill context (PREFERRED whenever available)
 
-**For Native Code Skills** (type: NATIVE_CODE):
-- Use `execute_code_skill` to run the pre-built automation
+**For Python Sandbox Skills** (type: PYTHON_SANDBOX):
+- Use `execute_sandbox_skill` to run code in a sandbox and copy files in/out
 
 ### 4. VERIFY & LEARN
 After each action:
@@ -150,7 +153,8 @@ If your hypothesis was wrong:
 
 ### API & Code
 - `call_http_api(method, url, ...)`: Execute HTTP requests
-- `execute_code_skill(skill_id)`: Run native code automation
+### Programmatic (Sandbox)
+- `execute_sandbox_skill(skill_id, task, files, inputs, python_code?)`: Run sandboxed Python file automation (E2B). Omit `python_code` to auto-generate.
 
 ### Documentation & Recovery
 - `get_documentation()`: Query app documentation

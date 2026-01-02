@@ -62,7 +62,7 @@ class _OpenAIClient:
             "model": self._model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_completion_tokens": max_tokens,
             "stop": stop,
         }
         if tools:

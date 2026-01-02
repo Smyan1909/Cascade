@@ -13,6 +13,7 @@ from mcp_server.tool_registry import ToolRegistry
 from mcp_server.body_tools import register_body_tools
 from mcp_server.playwright_tools import register_playwright_tools
 from mcp_server.explorer_tools import register_explorer_tools
+from mcp_server.sandbox_tools import register_sandbox_tools
 
 from agents.core.autonomous_agent import (
     AgentConfig, AgentResult, AgentStatus, AutonomousAgent
@@ -64,6 +65,7 @@ class AutonomousOrchestrator:
         router = register_body_tools(self._registry, grpc_client)
         register_playwright_tools(self._registry, router)
         register_explorer_tools(self._registry)
+        register_sandbox_tools(self._registry, context=self._context)
         self._add_orchestration_tools()
 
     def _add_orchestration_tools(self) -> None:

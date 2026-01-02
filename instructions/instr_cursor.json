@@ -1,6 +1,11 @@
 {
   "objective": "Map Cursor (IDE) workflows so workers can safely navigate codebases, edit files, search, run commands, and use built-in tools without destructive actions.",
   "app_context": "Cursor (desktop IDE)",
+  "automation_hierarchy": [
+    "If a direct API exists for the task, use that (WEB_API skill).",
+    "If no API exists but the task is a safe file transform, create a Python Sandbox skill (metadata.sandbox) and run it in E2B.",
+    "If neither exists, fall back to UI automation via clicking/typing."
+  ],
   "constraints": [
     "Work only in a dedicated test workspace/repo; do not modify unrelated user projects",
     "Do not push to remotes, publish extensions, or change global Git config",

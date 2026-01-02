@@ -22,17 +22,11 @@ When exploring a capability:
   - The API route is unreliable/blocked, or
   - The capability is inherently UI-driven (no programmatic interface).
 
-IMPORTANT CLARIFICATION (Desktop apps like Excel/Outlook):
+IMPORTANT CLARIFICATION (Desktop apps + file automation like Excel/PPT/Word):
 - Desktop apps usually do NOT expose an HTTP API on localhost.
-- For desktop “API-first”, prefer native automation via code execution (e.g., COM/Interop) using `execute_code_skill`
-  after generating/attaching a code artifact with `generate_code_artifact`.
-- **CRITICAL RULE FOR COM/OFFICE APPS** (Excel/Outlook/Word/PowerPoint and similar COM-automatable Windows apps):
-  - When you attach a code artifact, you MUST generate **C#**, not Python:
-    - Use: `generate_code_artifact(skill_id, language="csharp")`
-    - DO NOT use: `language="python"` for COM automation
-  - Reason: Python code artifacts run in a restricted sandbox and cannot import Cascade client libraries or COM deps reliably.
-  - If you cannot confidently generate safe, working C# code, DO NOT attach a code artifact; fall back to UI skills.
-- If you are unsure about how the API works, either test it or search on the internet for usage examples. 
+- When the automation target is a **file format** (e.g., `.xlsx`, `.pptx`, `.docx`) and a Python package exists that can
+  perform the required operations, prefer a **Python Sandbox skill** that runs in a sandboxed environment (E2B).
+- If you are unsure about which Python package/functions to use, search the internet for canonical usage examples and cite them in your reasoning.
 
 ## Cognitive Approach: Hypothesis-Driven Exploration
 
@@ -136,38 +130,45 @@ IMPORTANT:
 }
 ```
 
-### 4. Native Code Skills (desktop “API-first” via code artifacts)
-When a capability should be executed through native automation (COM/Interop/Win32/etc.), attach a code artifact to the Skill Map.
+### 4. Python Sandbox Skills (programmatic file automation)
+When a capability is best achieved by programmatically editing files (e.g., Excel `.xlsx`, PowerPoint `.pptx`), save it as a
+Skill Map that includes `metadata.sandbox` describing:
+- Which Python packages are required (`python_packages`)
+- Which functions are used for specific tasks (`functions` mapping)
+- The file input/output contract (`file_io`)
 
-How it works:
-- Explorer saves a normal Skill Map (often UI-derived evidence).
-- Then call `generate_code_artifact(skill_id, language="csharp"|"python")` to attach:
-  - `metadata.code_artifact_id`
-  - `metadata.code_language`
-  - `metadata.code_entrypoint`
-- Worker runs it via `execute_code_skill(skill_id)` (or `execute_code_skill(skill_id, artifact_id=...)`).
+Worker will execute these skills in a sandbox via `execute_sandbox_skill` (copy-in/run/copy-out).
 
-Example shape (after a code artifact is attached):
+Example shape (sandbox skill):
 
 ```json
 {
   "metadata": {
-    "skill_id": "excel_write_cell_native",
+    "skill_id": "excel_open_workbook_sandbox",
     "skill_type": "composite",
-    "capability": "write_cell",
-    "description": "Write a value into a cell using native automation (COM)",
-    "initial_state_description": "Excel is running; a workbook is open",
-    "requires_initial_state": true,
-    "preferred_method": "api",
-    "code_artifact_id": "4b0c2a3e-....",
-    "code_language": "csharp",
-    "code_entrypoint": "SkillEntrypoint.Run",
-    "code_dependencies": []
+    "capability": "open_workbook",
+    "description": "Open an .xlsx workbook using openpyxl inside a sandbox",
+    "initial_state_description": "A local .xlsx file exists on disk",
+    "requires_initial_state": false,
+    "preferred_method": "sandbox",
+    "sandbox": {
+      "provider": "e2b",
+      "python_packages": ["openpyxl"],
+      "functions": {
+        "open_workbook": {"module": "openpyxl", "function": "load_workbook", "description": "Load a workbook from a file path"}
+      },
+      "file_io": {
+        "inputs": [{"name": "workbook", "file_glob": "*.xlsx", "required": true}],
+        "outputs": [{"name": "workbook", "file_glob": "*.xlsx", "required": true}],
+        "notes": "Read workbook, modify, then save back."
+      },
+      "entrypoint": "open_workbook"
+    }
   },
   "steps": [
     {
-      "action": "CallAPI",
-      "step_description": "Execute the native code artifact to perform the operation",
+      "action": "RunSandbox",
+      "step_description": "Execute sandboxed Python to transform the workbook",
       "confidence": 0.9
     }
   ]
@@ -333,6 +334,14 @@ def get_explorer_task(app_name: str, instructions: dict) -> str:
     if instructions:
         if "objective" in instructions:
             instr_text += f"**Objective**: {instructions['objective']}\n\n"
+        if "automation_hierarchy" in instructions and isinstance(instructions["automation_hierarchy"], list):
+            instr_text += "**Automation hierarchy (MUST FOLLOW)**:\n"
+            for item in instructions["automation_hierarchy"]:
+                instr_text += f"- {item}\n"
+            instr_text += "\n"
+        if "programmatic_policy" in instructions and isinstance(instructions["programmatic_policy"], dict):
+            instr_text += "**Programmatic / Sandbox policy**:\n"
+            instr_text += f"```json\n{json.dumps(instructions['programmatic_policy'], indent=2)}\n```\n\n"
         if "coverage" in instructions:
             instr_text += f"**Capabilities to discover**:\n"
             for category, items in instructions["coverage"].items():
@@ -358,8 +367,13 @@ Your job is SIMPLE: List the skills and documents you will create.
 ## Input
 You will be given:
 1. The application name
-2. Requested capabilities to explore
+2. Requested capabilities to explore (including automation hierarchy + programmatic policy)
 3. Skills that ALREADY EXIST (DO NOT include these)
+
+## Critical routing policy (MUST FOLLOW)
+- Always plan in this order: **API → Sandbox (programmatic file automation) → UI**.
+- If the instructions indicate file automation is preferred (e.g. Excel `.xlsx`), you MUST include sandbox skills that
+  store `metadata.sandbox` (packages + function mapping + file IO contract). Do NOT default to UI clicks for these.
 
 ## Output Format
 Output your plan in this EXACT format:
@@ -382,7 +396,10 @@ EXPLORATION ORDER:
 
 ## Guidelines
 - Keep skill IDs short and descriptive (e.g., "calc_add", "calc_scientific_mode") 
-- Method should be 1 sentence (e.g., "Click the + button and verify")
+- Method should be 1 sentence and state the route (API vs Sandbox vs UI), e.g.:
+  - "API: Call HTTPS endpoint X and verify response"
+  - "Sandbox: Use openpyxl.load_workbook to edit file and save"
+  - "UI: Click the + button and verify"
 - DO NOT include skills that already exist
 - Be exhaustive - list ALL skills the instructions require
 - Group related skills together in exploration order
@@ -411,6 +428,7 @@ def create_explorer_plan(
     
     Returns the plan as formatted text.
     """
+    import json
     from agents.core.autonomous_agent import _get_langchain_model
     
     # Format capabilities
@@ -418,10 +436,18 @@ def create_explorer_plan(
     if instructions:
         if "objective" in instructions:
             capabilities_text += f"Objective: {instructions['objective']}\n"
+        if "automation_hierarchy" in instructions and isinstance(instructions["automation_hierarchy"], list):
+            capabilities_text += "Automation hierarchy:\n"
+            for item in instructions["automation_hierarchy"]:
+                capabilities_text += f"- {item}\n"
+        if "programmatic_policy" in instructions and isinstance(instructions["programmatic_policy"], dict):
+            capabilities_text += f"Programmatic policy: {json.dumps(instructions['programmatic_policy'])}\n"
         if "coverage" in instructions:
             for category, items in instructions["coverage"].items():
                 if isinstance(items, list):
                     capabilities_text += f"- {category}: {', '.join(items)}\n"
+        if "constraints" in instructions:
+            capabilities_text += f"Constraints: {', '.join(instructions['constraints'])}\n"
     
     if not capabilities_text:
         capabilities_text = "Explore all major features"
@@ -461,9 +487,13 @@ Your job is to UPDATE the plan according to the user's feedback.
 ## Input
 You will be given:
 1. The application name
-2. Requested capabilities to explore
+2. Requested capabilities to explore (including automation hierarchy + programmatic policy)
 3. Skills that ALREADY EXIST (DO NOT include these)
 4. User feedback on what to change
+
+## Critical routing policy (MUST FOLLOW)
+- Always plan in this order: **API → Sandbox (programmatic file automation) → UI**.
+- If the instructions indicate file automation is preferred, prioritize sandbox skills and avoid UI-only plans.
 
 ## Output Format
 Output your REFINED plan in this EXACT format:
@@ -486,7 +516,7 @@ EXPLORATION ORDER:
 
 ## Guidelines
 - Keep skill IDs short and descriptive (e.g., "calc_add", "calc_scientific_mode") 
-- Method should be 1 sentence (e.g., "Click the + button and verify")
+- Method should be 1 sentence and state the route (API vs Sandbox vs UI)
 - DO NOT include skills that already exist
 - Be exhaustive - list ALL skills the instructions require
 - Group related skills together in exploration order
@@ -527,6 +557,7 @@ def refine_explorer_plan(
     Returns:
         Refined plan as formatted text
     """
+    import json
     from agents.core.autonomous_agent import _get_langchain_model
     
     # Format capabilities
@@ -534,10 +565,18 @@ def refine_explorer_plan(
     if instructions:
         if "objective" in instructions:
             capabilities_text += f"Objective: {instructions['objective']}\n"
+        if "automation_hierarchy" in instructions and isinstance(instructions["automation_hierarchy"], list):
+            capabilities_text += "Automation hierarchy:\n"
+            for item in instructions["automation_hierarchy"]:
+                capabilities_text += f"- {item}\n"
+        if "programmatic_policy" in instructions and isinstance(instructions["programmatic_policy"], dict):
+            capabilities_text += f"Programmatic policy: {json.dumps(instructions['programmatic_policy'])}\n"
         if "coverage" in instructions:
             for category, items in instructions["coverage"].items():
                 if isinstance(items, list):
                     capabilities_text += f"- {category}: {', '.join(items)}\n"
+        if "constraints" in instructions:
+            capabilities_text += f"Constraints: {', '.join(instructions['constraints'])}\n"
     
     if not capabilities_text:
         capabilities_text = "Explore all major features"

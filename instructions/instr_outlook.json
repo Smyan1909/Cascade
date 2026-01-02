@@ -1,6 +1,11 @@
 {
   "objective": "Map Microsoft Outlook workflows for reading, searching, organizing mail, and sending safe test replies/messages (self-only).",
   "app_context": "Microsoft Outlook (desktop)",
+  "automation_hierarchy": [
+    "If a cloud/web API exists for the task, use that (WEB_API skill).",
+    "If no API exists but the task is a safe file transform, create a Python Sandbox skill (metadata.sandbox) and run it in E2B.",
+    "If neither exists, fall back to UI automation via clicking/typing."
+  ],
   "constraints": [
     "COMMUNICATION SAFETY: The only allowed recipient for any send/reply/forward is the signed-in user (send to self only).",
     "COMMUNICATION SAFETY: Reply ONLY to email threads where the other party is also the signed-in user (self-sent test threads). Never reply to real senders.",

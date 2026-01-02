@@ -58,11 +58,6 @@ class FirestoreClient:
     def explorer_checkpoint_path(self, run_id: str) -> str:
         return self._context.get_explorer_checkpoint_path(run_id)
 
-    def code_artifact_path(self, artifact_id: str) -> str:
-        return (
-            f"{self._context.get_firestore_path_prefix()}/code_artifacts/{artifact_id}"
-        )
-
     def skill_maps_collection(self) -> str:
         """Return the collection path for skill maps."""
         return f"{self._context.get_firestore_path_prefix()}/skill_maps"
@@ -109,12 +104,6 @@ class FirestoreClient:
 
     def load_checkpoint(self, path: str) -> Optional[Dict[str, Any]]:
         return self.get_document(path)
-
-    def save_code_artifact(self, artifact_id: str, payload: Dict[str, Any]) -> None:
-        self.upsert_document(self.code_artifact_path(artifact_id), payload)
-
-    def get_code_artifact(self, artifact_id: str) -> Optional[Dict[str, Any]]:
-        return self.get_document(self.code_artifact_path(artifact_id))
 
     # Approval policy CRUD
     def get_approval_policy(self, policy_id: str) -> Optional[Dict[str, Any]]:

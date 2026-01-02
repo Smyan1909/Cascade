@@ -1,6 +1,17 @@
 {
   "objective": "Map core Microsoft Excel workflows so workers can create/edit spreadsheets, analyze data, and export results safely.",
   "app_context": "Microsoft Excel (desktop)",
+  "automation_hierarchy": [
+    "If a cloud/web API exists for the task, use that (WEB_API skill).",
+    "If no API exists and the task is a file transform (e.g., .xlsx), create a Python Sandbox skill (metadata.sandbox) and run it in E2B.",
+    "If neither exists, fall back to UI automation via clicking/typing."
+  ],
+  "programmatic_policy": {
+    "prefer_file_automation": true,
+    "sandbox_provider": "e2b",
+    "expected_packages": ["openpyxl"],
+    "notes": "Focus on file-level automation (editing .xlsx) using sandboxed Python, not controlling the live Excel UI, unless UI is the only option."
+  },
   "constraints": [
     "Be nondestructive: never modify existing real workbooks unless explicitly created during this run",
     "Use a new blank workbook for most exploration",
