@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
+import re
 from openai import RateLimitError
 
 from langchain_core.messages import HumanMessage, AIMessage
@@ -530,6 +531,84 @@ Please provide a summary in this exact format:
         
         return "\n".join(narrative_parts)
 
+    def _extract_success_criteria(self, text: str) -> Optional[List[str]]:
+        """
+        Extract success criteria from free-form text.
+
+        Supports:
+        - Inline: "SUCCESS CRITERIA: <text>"
+        - Block:
+            SUCCESS CRITERIA:
+            - item
+            - item
+
+        Returns up to 10 criteria lines.
+        """
+        if not text:
+            return None
+
+        lines = text.splitlines()
+        criteria: List[str] = []
+
+        # Find a header line like "SUCCESS CRITERIA:" (colon optional)
+        header_idx: Optional[int] = None
+        inline_match: Optional[str] = None
+        for i, raw in enumerate(lines):
+            line = raw.strip()
+            if not line:
+                continue
+            m = re.match(r"(?i)^SUCCESS\s+CRITERIA\s*:?\s*(.*)$", line)
+            if m:
+                header_idx = i
+                inline_match = (m.group(1) or "").strip()
+                break
+
+        if header_idx is None:
+            return None
+
+        # Inline criteria on same line
+        if inline_match:
+            criteria.append(inline_match)
+            return criteria[:10]
+
+        # Bullet / paragraph lines following the header
+        for raw in lines[header_idx + 1:]:
+            line = raw.strip()
+            if not line:
+                if criteria:
+                    break
+                continue
+
+            # Stop if we hit another obvious section header
+            if re.match(r"(?i)^(GOAL|EXPECTED RESULT|PLAN|STEPS|INSTRUCTIONS|SUMMARY|RESULT)\s*:?", line):
+                break
+
+            if line.startswith(("-", "•")):
+                item = line[1:].strip()
+                if item:
+                    criteria.append(item)
+            else:
+                # Allow non-bulleted criteria lines if they contain letters
+                if any(c.isalpha() for c in line):
+                    criteria.append(line)
+
+            if len(criteria) >= 10:
+                break
+
+        return criteria[:10] if criteria else None
+
+    def _has_completion_sentinel(self, text: str) -> bool:
+        """
+        Detect explicit completion signals that should stop the loop immediately.
+        We treat these as high-precision markers (they must appear as a standalone line).
+        """
+        if not text:
+            return False
+        return bool(re.search(
+            r"(?mi)^\s*(TASK\s+COMPLETE|EXECUTION\s+COMPLETE|EXPLORATION\s+COMPLETE|ORCHESTRATION\s+COMPLETE)\b.*$",
+            text,
+        ))
+
     def _evaluate_completion(
         self,
         task: str,
@@ -549,12 +628,18 @@ Please provide a summary in this exact format:
             "task complete", "completed the task", "successfully completed",
             "have completed", "is complete", "i've completed", "finished the task",
             "the result is", "the answer is", "calculation complete",
-            "done", "accomplished", "achieved"
+            "accomplished", "achieved"
         ]
         response_lower = last_response.lower() if last_response else ""
+
+        # Avoid false positives on negations
+        negation_phrases = [
+            "not done", "not complete", "incomplete", "not finished", "still working", "still need", "need to continue"
+        ]
+        has_negation = any(p in response_lower for p in negation_phrases)
         
         # Strong completion signal: agent explicitly claims completion
-        has_completion_signal = any(phrase in response_lower for phrase in completion_phrases)
+        has_completion_signal = (not has_negation) and any(phrase in response_lower for phrase in completion_phrases)
         
         # Failure signals that override completion
         failure_phrases = ["failed", "error", "could not", "unable to", "cannot"]
@@ -572,10 +657,16 @@ Please provide a summary in this exact format:
             # Extract what the agent was trying to achieve from the task
             task_summary = task[:500] if len(task) > 500 else task
             
+            criteria_block = ""
+            if success_criteria:
+                criteria_lines = "\n".join([f"- {c}" for c in success_criteria[:10]])
+                criteria_block = f"\nSUCCESS CRITERIA (declared):\n{criteria_lines}\n"
+
             evaluation_prompt = f"""You are evaluating if an AI agent completed its task.
 
 TASK GIVEN TO AGENT:
 {task_summary}
+{criteria_block}
 
 ACTIONS TAKEN ({len(tool_calls)} actions):
 {action_narrative}
@@ -648,6 +739,7 @@ NEXT_ACTION: [what to do next, or "None" if complete/stuck]
         iterations = 0
         consecutive_no_tools = 0  # Track consecutive responses without tool calls
         max_consecutive_no_tools = 4  # Stop after this many empty responses
+        declared_success_criteria: Optional[List[str]] = None
         
         try:
             current_messages = [HumanMessage(content=user_content)]
@@ -657,6 +749,7 @@ NEXT_ACTION: [what to do next, or "None" if complete/stuck]
             
             while iterations < self._config.max_iterations:
                 next_action = None
+                stop_now = False
 
                 initial_state = {"messages": current_messages}
                 should_continue = False
@@ -675,6 +768,13 @@ NEXT_ACTION: [what to do next, or "None" if complete/stuck]
                         
                         # Log AI reasoning before tool calls
                         if hasattr(msg, "content") and msg.type == "ai":
+                            # Capture declared success criteria from the agent's own text (preferred),
+                            # so we don't depend on the user-provided task template containing a header.
+                            if not declared_success_criteria and msg.content:
+                                extracted = self._extract_success_criteria(msg.content)
+                                if extracted:
+                                    declared_success_criteria = extracted
+
                             if hasattr(msg, "tool_calls") and msg.tool_calls:
                                 # This is reasoning before tool calls
                                 if msg.content:  # Only log if there's actual reasoning
@@ -711,6 +811,13 @@ NEXT_ACTION: [what to do next, or "None" if complete/stuck]
                                 # Response without tool calls - log the reasoning
                                 consecutive_no_tools += 1
                                 final_response = msg.content
+
+                                # If the model emits an explicit completion sentinel, stop immediately.
+                                if self._has_completion_sentinel(final_response):
+                                    self._log("✓ Completion sentinel detected - stopping execution")
+                                    should_continue = False
+                                    stop_now = True
+                                    break
                                 
                                 # Log agent's reasoning even without tool calls
                                 if final_response:
@@ -727,62 +834,61 @@ NEXT_ACTION: [what to do next, or "None" if complete/stuck]
                                 # Use LLM to evaluate completion
                                 self._log("Evaluating completion status...")
                                 
-                                # Extract success criteria from task if available
-                                success_criteria = None
-                                if "SUCCESS CRITERIA:" in task.upper():
-                                    try:
-                                        criteria_section = task.upper().split("SUCCESS CRITERIA:")[1]
-                                        criteria_lines = []
-                                        for line in criteria_section.split("\n"):
-                                            line = line.strip()
-                                            if line.startswith("-") or line.startswith("•"):
-                                                criteria_lines.append(line[1:].strip())
-                                            elif line and not line.startswith("#") and len(criteria_lines) < 10:
-                                                if any(c.isalpha() for c in line):
-                                                    criteria_lines.append(line)
-                                        success_criteria = criteria_lines[:10] if criteria_lines else None
-                                    except:
-                                        pass
-                                
-                                if consecutive_no_tools > 1:
+                                # Use criteria declared by the agent (preferred); fallback to task text if present.
+                                success_criteria = declared_success_criteria or self._extract_success_criteria(task)
 
-                                    if self._config.enable_verification:
-                                        eval_status, eval_reasoning, next_action = self._evaluate_completion(
-                                            task, all_tool_calls, final_response, success_criteria
-                                        )
-                                        
-                                        self._log(f"\n{'='*50}")
-                                        self._log(f"EVALUATION: {eval_status}")
-                                        self._log(f"Reasoning: {eval_reasoning[:200]}...")
-                                    else:
-                                        # When verification is disabled, we trust the agent's decision to stop
-                                        # If it stopped making tool calls, it's done.
-                                        eval_status = "COMPLETE"
-                                        eval_reasoning = "Verification disabled - agent finished task"
-                                        next_action = "None"
-                                        self._log(f"[Verification Disabled] Agent finished task.")
-                                    
-                                    if eval_status == "COMPLETE":
-                                        self._log("✓ All success criteria met!")
-                                        self._log(f"{'='*50}")
-                                        should_continue = False
-                                    elif eval_status == "STUCK":
-                                        self._log("⚠ Agent appears stuck - stopping execution")
-                                        self._log(f"{'='*50}")
-                                        should_continue = False
-                                    else:  # INCOMPLETE
-                                        if consecutive_no_tools >= max_consecutive_no_tools:
-                                            self._log(f"⚠ {consecutive_no_tools} attempts without progress - stopping")
-                                            self._log(f"{'='*50}")
-                                            should_continue = False
-                                        else:
-                                            self._log(f"→ Continuing... (attempt {consecutive_no_tools}/{max_consecutive_no_tools})")
-                                            if next_action:
-                                                self._log(f"Next: {next_action[:100]}")
-                                            self._log(f"{'='*50}")
-                                            should_continue = True
+                                if self._config.enable_verification:
+                                    eval_status, eval_reasoning, next_action = self._evaluate_completion(
+                                        task, all_tool_calls, final_response, success_criteria
+                                    )
+
+                                    self._log(f"\n{'='*50}")
+                                    self._log(f"EVALUATION: {eval_status}")
+                                    self._log(f"Reasoning: {eval_reasoning[:200]}...")
                                 else:
+                                    # With verification disabled, we rely on explicit completion sentinels/phrases.
+                                    # If the model stops calling tools without a completion signal, treat it as INCOMPLETE
+                                    # until we hit the no-progress guardrail (then STUCK).
+                                    response_lower = final_response.lower() if final_response else ""
+                                    completion_hint = any(
+                                        p in response_lower for p in ["task complete", "completed the task", "finished the task", "the answer is", "the result is"]
+                                    )
+                                    if completion_hint:
+                                        eval_status = "COMPLETE"
+                                        eval_reasoning = "Verification disabled - explicit completion signal"
+                                        next_action = "None"
+                                        self._log(f"[Verification Disabled] Completion signal detected.")
+                                    elif consecutive_no_tools >= max_consecutive_no_tools:
+                                        eval_status = "STUCK"
+                                        eval_reasoning = "Verification disabled - no progress (no tool calls)"
+                                        next_action = "None"
+                                    else:
+                                        eval_status = "INCOMPLETE"
+                                        eval_reasoning = "Verification disabled - response looks like planning; continuing"
+                                        next_action = ""
+
+                                if eval_status == "COMPLETE":
+                                    self._log("✓ Task complete")
+                                    self._log(f"{'='*50}")
+                                    should_continue = False
+                                    stop_now = True
+                                elif eval_status == "STUCK":
+                                    self._log("⚠ Agent appears stuck - stopping execution")
+                                    self._log(f"{'='*50}")
+                                    should_continue = False
+                                    stop_now = True
+                                else:  # INCOMPLETE
+                                    self._log(f"→ Continuing... (attempt {consecutive_no_tools}/{max_consecutive_no_tools})")
+                                    if next_action:
+                                        self._log(f"Next: {next_action[:100]}")
+                                    self._log(f"{'='*50}")
                                     should_continue = True
+
+                                if stop_now:
+                                    break
+
+                    if stop_now:
+                        break
 
                     if iterations >= self._config.max_iterations:
                         break

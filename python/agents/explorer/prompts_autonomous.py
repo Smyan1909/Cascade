@@ -298,6 +298,14 @@ When ALL requested capabilities have skills saved, say:
 - "EXPLORATION COMPLETE - all capabilities have been mapped"
 
 DO NOT say this until every capability has a skill saved!
+
+## Success Criteria (Required)
+Before you begin exploring, explicitly state:
+- GOAL: what app/capabilities you are exploring
+- SUCCESS CRITERIA: what evidence will prove exploration is complete (e.g., "Every requested capability has a saved skill map")
+
+## Completion Sentinel (Required)
+When the success criteria are met, emit the completion phrase above (as a standalone line) and STOP.
 """
 
 EXPLORER_TASK_TEMPLATE = """## Instructions for This Exploration

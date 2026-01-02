@@ -210,6 +210,19 @@ WORKER_TASK_TEMPLATE = """## Task to Execute
 5. **REVISE** your approach if the result was unexpected
 
 Begin by checking available skills and forming your initial hypothesis.
+
+## Success Criteria (Required)
+Before taking ANY action, explicitly write:
+- GOAL: ...
+- SUCCESS CRITERIA: ...
+
+Your SUCCESS CRITERIA must be outcome-based and verifiable from the UI / API response / file output.
+
+## Completion Sentinel (Required)
+When you have met the success criteria, emit this as a standalone line:
+TASK COMPLETE
+
+Then provide a short summary and STOP. Do not continue with extra improvements or exploration.
 """
 
 

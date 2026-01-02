@@ -90,6 +90,17 @@ If something went wrong:
 
 ## Completion
 When the goal is achieved, provide a comprehensive summary.
+
+## Success Criteria (Required)
+Before taking actions, explicitly write:
+- GOAL: ...
+- SUCCESS CRITERIA: ... (verifiable; avoid vague criteria)
+
+## Completion Sentinel (Required)
+When the goal is achieved and success criteria are met, emit this as a standalone line:
+ORCHESTRATION COMPLETE
+
+Then provide your final summary and STOP. Do not do extra exploration or additional improvements not requested.
 """
 
 ORCHESTRATOR_TASK_TEMPLATE = """## Goal to Achieve
