@@ -9,3 +9,10 @@
 - `phase7-deploy-compose.md`: Containerization and compose runbook.
 - `testing.md`: Unified testing strategy and lanes.
 
+## Module deep-dives
+
+- `modules/python-agents.md`: Python Brain structure, agent loop, and entrypoints
+- `modules/grpc.md`: gRPC contract, codegen, compatibility, and testing
+- `modules/mcp-server.md`: Tool registry + stdio MCP server and how to add tools
+- `modules/csharp-body.md`: Body hosting, providers, vision/OCR, and tests
+

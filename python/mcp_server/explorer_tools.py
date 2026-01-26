@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
+from urllib.parse import urlparse
 
 from agents.explorer.tools.api_tester import ApiTester
 from agents.explorer.tools.web_search import WebSearchClient
 
 
-def register_explorer_tools(registry: Any) -> None:
+def register_explorer_tools(registry: Any, approval_manager: Optional[Any] = None) -> None:
     """Register Explorer tools with the MCP registry."""
 
     web_search_client = WebSearchClient()
@@ -34,7 +35,21 @@ def register_explorer_tools(registry: Any) -> None:
             "content": [
                 {
                     "type": "text",
-                    "text": str(web_search_client.search(query, top_k)),
+                    "text": str(
+                        web_search_client.search(query, top_k)
+                        if approval_manager is None
+                        else (
+                            web_search_client.search(query, top_k)
+                            if approval_manager.ensure_approved(
+                                __import__("agents.core.approvals", fromlist=["CapabilityRequest"]).CapabilityRequest(
+                                    capability_type="network",
+                                    parameters={"host": "web_search_provider"},
+                                    reason="Web search",
+                                )
+                            )
+                            else "Denied by approval policy."
+                        )
+                    ),
                 }
             ]
         },
@@ -43,7 +58,11 @@ def register_explorer_tools(registry: Any) -> None:
     # API tester
     registry.register_tool(
         name="test_api",
-        description="Test an API endpoint",
+        description="""Test an HTTP API endpoint (network request).
+
+Notes:
+- This tool is for real HTTP APIs (e.g., web services). Desktop apps like Excel typically do NOT expose a localhost HTTP API.
+- For programmatic desktop file automation, create a Python Sandbox skill and execute via `execute_sandbox_skill` instead.""",
         input_schema={
             "type": "object",
             "properties": {
@@ -82,6 +101,27 @@ def register_explorer_tools(registry: Any) -> None:
                             headers=headers,
                             params=params,
                             json=json_body,
+                        )
+                        if approval_manager is None
+                        else (
+                            api_tester.test(
+                                method=method,
+                                url=url,
+                                headers=headers,
+                                params=params,
+                                json=json_body,
+                            )
+                            if approval_manager.ensure_approved(
+                                __import__("agents.core.approvals", fromlist=["CapabilityRequest"]).CapabilityRequest(
+                                    capability_type="network",
+                                    parameters={
+                                        "host": (urlparse(url).hostname or "").lower() or "unknown",
+                                        "method": str(method).upper(),
+                                    },
+                                    reason="Test API endpoint",
+                                )
+                            )
+                            else "Denied by approval policy."
                         )
                     ),
                 }

@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from cascade_client.auth.context import CascadeContext
 from cascade_client.grpc_client import CascadeGrpcClient
 
 from mcp_server.tool_registry import ToolRegistry
 from mcp_server.body_tools import register_body_tools
+from mcp_server.playwright_tools import register_playwright_tools
 from mcp_server.explorer_tools import register_explorer_tools
+from mcp_server.sandbox_tools import register_sandbox_tools
 
 from agents.core.autonomous_agent import (
     AgentConfig, AgentResult, AgentStatus, AutonomousAgent
@@ -60,8 +62,10 @@ class AutonomousOrchestrator:
         
         # Setup tool registry
         self._registry = ToolRegistry()
-        register_body_tools(self._registry, grpc_client)
+        router = register_body_tools(self._registry, grpc_client)
+        register_playwright_tools(self._registry, router)
         register_explorer_tools(self._registry)
+        register_sandbox_tools(self._registry, context=self._context)
         self._add_orchestration_tools()
 
     def _add_orchestration_tools(self) -> None:
@@ -179,6 +183,8 @@ Use this to perform actions in an application using available skills or direct a
         self,
         goal: str,
         additional_instructions: str = "",
+        summarized_conversation_history: Optional[str] = None,
+        raw_conversation_history: Optional[List[Dict[str, str]]] = None,
         auto_approve: bool = False,
     ) -> AgentResult:
         """
@@ -259,6 +265,8 @@ Use this to perform actions in an application using available skills or direct a
             tool_registry=self._registry,
             system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
             config=config,
+            summarized_conversation_history=summarized_conversation_history,
+            raw_conversation_history=raw_conversation_history,
         )
         
         # Run the orchestration

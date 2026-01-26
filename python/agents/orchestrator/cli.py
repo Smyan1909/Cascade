@@ -2,12 +2,13 @@
 
 import argparse
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Dict, List, Optional
 
 from cascade_client.auth.context import CascadeContext
 from cascade_client.grpc_client import CascadeGrpcClient
 import os 
 from pathlib import Path
+from agents.core import classify_next_input_intent, summarize_conversation
 
 try:
     from dotenv import load_dotenv
@@ -67,18 +68,68 @@ def main():
     print()
 
     orchestrator = AutonomousOrchestrator(context, grpc_client, config)
-    result = orchestrator.run(args.goal, auto_approve=args.auto_approve)
 
-    print("\n" + "=" * 60)
-    print(f"Status: {result.status.value}")
-    print(f"Iterations: {result.iterations}")
-    print(f"Tool Calls: {len(result.tool_calls)}")
-    print(f"Elapsed: {result.elapsed_seconds:.1f}s")
-    if result.error:
-        print(f"Error: {result.error}")
-    print("=" * 60)
-    print("\nFinal Response:")
-    print(result.final_response)
+    current_goal = args.goal
+    additional_instructions = ""
+    summarized_conversation_history: Optional[str] = None
+    raw_conversation_history: List[Dict[str, str]] = []
+
+    def count_tokens(messages: List[Dict[str, str]]) -> int:
+        # Rough heuristic: 4 chars ≈ 1 token
+        text = "".join(str(msg.get("content", "")) for msg in messages)
+        return len(text.encode("utf-8")) // 4
+
+    while True:
+        result = orchestrator.run(
+            current_goal,
+            additional_instructions=additional_instructions,
+            summarized_conversation_history=summarized_conversation_history,
+            raw_conversation_history=raw_conversation_history,
+            auto_approve=args.auto_approve,
+        )
+
+        print("\n" + "=" * 60)
+        print(f"Status: {result.status.value}")
+        print(f"Iterations: {result.iterations}")
+        print(f"Tool Calls: {len(result.tool_calls)}")
+        print(f"Elapsed: {result.elapsed_seconds:.1f}s")
+        if result.error:
+            print(f"Error: {result.error}")
+        print("=" * 60)
+        print("\nFinal Response:")
+        print(result.final_response)
+
+        raw_conversation_history.append(
+            {
+                "role": "user",
+                "content": current_goal
+                + (("\n\nADDITIONAL_INSTRUCTIONS:\n" + additional_instructions) if additional_instructions else ""),
+            }
+        )
+        raw_conversation_history.append({"role": "assistant", "content": result.final_response})
+
+        if count_tokens(raw_conversation_history) > 4000:
+            to_summarize: List[Dict[str, str]] = raw_conversation_history[-10:]
+            if summarized_conversation_history:
+                to_summarize = [{"role": "system", "content": summarized_conversation_history}] + to_summarize
+            summarized_conversation_history = summarize_conversation(to_summarize)
+            raw_conversation_history = raw_conversation_history[-10:]
+
+        next_input = input("\nEnter next instruction/goal (blank to quit): ").strip()
+        if not next_input:
+            break
+
+        decision = classify_next_input_intent(
+            current_objective=current_goal,
+            user_input=next_input,
+            summarized_conversation_history=summarized_conversation_history,
+        )
+        if decision.intent == "new":
+            current_goal = decision.normalized_text
+            additional_instructions = ""
+            print(f"\n[Orchestrator] New goal set: {current_goal}")
+        else:
+            additional_instructions = decision.normalized_text
 
 
 if __name__ == "__main__":

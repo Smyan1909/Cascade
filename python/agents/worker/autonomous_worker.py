@@ -4,17 +4,27 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from cascade_client.auth.context import CascadeContext
 from cascade_client.grpc_client import CascadeGrpcClient
 
 from mcp_server.tool_registry import ToolRegistry
 from mcp_server.body_tools import register_body_tools
+from mcp_server.playwright_tools import register_playwright_tools
 from mcp_server.explorer_tools import register_explorer_tools
+from mcp_server.api_tools import register_api_tools
+from mcp_server.sandbox_tools import register_sandbox_tools
 
 from agents.core.autonomous_agent import AutonomousAgent, AgentConfig, AgentResult
-from agents.core.verify_prompts import WORKER_SYSTEM_PROMPT, get_worker_task
+from agents.worker.prompts_autonomous import WORKER_SYSTEM_PROMPT, get_worker_task
+from agents.worker.skill_context import (
+    load_all_skills,
+    categorize_skill,
+    format_skill_as_context,
+    get_skill_summaries,
+    get_executable_skills,
+)
 
 
 class AutonomousWorker:
@@ -32,6 +42,7 @@ class AutonomousWorker:
         context: CascadeContext,
         grpc_client: CascadeGrpcClient,
         config: Optional[AgentConfig] = None,
+        auto_approve: bool = False,
     ):
         self._context = context
         self._grpc = grpc_client
@@ -39,93 +50,264 @@ class AutonomousWorker:
             max_iterations=30,
             verbose=True,
             thread_id=f"worker_{uuid.uuid4().hex[:8]}",
+            enable_verification=False,
         )
+        self._auto_approve = auto_approve
         
         # Setup MCP tool registry
         self._registry = ToolRegistry()
-        register_body_tools(self._registry, grpc_client)
-        register_explorer_tools(self._registry)
-        self._register_skill_tools()
+        from storage.firestore_client import FirestoreClient
+        from agents.core.approvals import ApprovalManager
 
-    def _register_skill_tools(self) -> None:
-        """Register skill execution tools from available skill maps."""
+        fs = FirestoreClient(self._context)
+        self._approvals = ApprovalManager(self._context, fs, auto_approve=self._auto_approve)
+
+        router = register_body_tools(self._registry, grpc_client, approval_manager=self._approvals)
+        register_playwright_tools(self._registry, router)
+        register_explorer_tools(self._registry, approval_manager=self._approvals)
+        self._register_skill_context_tools()
+        self._register_api_tools()
+        self._register_sandbox_tools()
+        self._register_documentation_tools()
+
+    def _register_skill_context_tools(self) -> None:
+        """Register skill context tools (list and read skills)."""
+        context = self._context
+        
+        def list_skills() -> Dict[str, Any]:
+            """List all available skills with summaries."""
+            try:
+                skills = load_all_skills(context)
+                summaries = get_skill_summaries(skills)
+                
+                if not summaries:
+                    return {
+                        "content": [{"type": "text", "text": "No skills available for this application."}]
+                    }
+                
+                lines = [f"## Available Skills ({len(summaries)} total)\n"]
+                for s in summaries:
+                    type_badge = f"[{s['type'].upper()}]"
+                    lines.append(f"- **{s['skill_id']}** {type_badge}")
+                    if s['capability']:
+                        lines.append(f"  Capability: {s['capability']}")
+                    if s['description']:
+                        lines.append(f"  {s['description'][:100]}")
+                    lines.append("")
+                
+                lines.append("\nUse `read_skill(skill_id)` to get detailed instructions.")
+                
+                return {
+                    "content": [{"type": "text", "text": "\n".join(lines)}]
+                }
+            except Exception as e:
+                return {
+                    "content": [{"type": "text", "text": f"Error listing skills: {str(e)}"}],
+                    "isError": True
+                }
+        
+        def read_skill(skill_id: str) -> Dict[str, Any]:
+            """Read full skill content as context."""
+            try:
+                skills = load_all_skills(context)
+                skill = next((s for s in skills if s.metadata.skill_id == skill_id), None)
+                
+                if not skill:
+                    return {
+                        "content": [{"type": "text", "text": f"Skill '{skill_id}' not found."}],
+                        "isError": True
+                    }
+                
+                formatted = format_skill_as_context(skill)
+                return {
+                    "content": [{"type": "text", "text": formatted}]
+                }
+            except Exception as e:
+                return {
+                    "content": [{"type": "text", "text": f"Error reading skill: {str(e)}"}],
+                    "isError": True
+                }
+        
+        # Register list_skills tool
+        self._registry.register_tool(
+            name="list_skills",
+            description="""List all available skills for this application.
+
+Returns summaries of skills with their types:
+- UI: Use base tools (click_element, type_text) guided by skill instructions
+- WEB_API: Use call_http_api tool with skill endpoint details
+- PYTHON_SANDBOX: Use execute_sandbox_skill for sandboxed programmatic file automation
+
+Call read_skill(skill_id) to get detailed instructions for a specific skill.""",
+            input_schema={"type": "object", "properties": {}},
+            handler=list_skills,
+        )
+        
+        # Register read_skill tool
+        self._registry.register_tool(
+            name="read_skill",
+            description="""Read detailed instructions for a specific skill.
+
+Returns step-by-step guidance on how to execute the skill:
+- For UI skills: Shows which elements to interact with and selectors to use
+- For API skills: Shows endpoints, methods, and parameters
+- For sandbox skills: Shows how to call execute_sandbox_skill
+
+IMPORTANT: Read skills BEFORE executing tasks to understand the right approach.""",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "skill_id": {
+                        "type": "string",
+                        "description": "ID of the skill to read"
+                    }
+                },
+                "required": ["skill_id"]
+            },
+            handler=lambda skill_id: read_skill(skill_id),
+        )
+        
+        # Log skill availability
         try:
-            from storage.firestore_client import FirestoreClient
-            from agents.explorer.skill_map import SkillMap
-            
-            fs = FirestoreClient(self._context)
-            skill_maps = fs.list_skill_maps()
-            
-            for skill_id, data in skill_maps.items():
-                try:
-                    skill = SkillMap.model_validate(data)
-                    self._register_single_skill(skill)
-                except Exception:
-                    continue
-                    
-            print(f"[Worker] Registered {len(skill_maps)} skill tools")
-            
+            skills = load_all_skills(context)
+            print(f"[Worker] Found {len(skills)} skills (context-based)")
         except Exception as e:
             print(f"[Worker] Could not load skills: {e}")
+    
+    def _register_api_tools(self) -> None:
+        """Register API tools."""
+        register_api_tools(self._registry, approval_manager=self._approvals)
 
-    def _register_single_skill(self, skill) -> None:
-        """Register a single skill as a tool."""
-        skill_id = skill.metadata.skill_id
-        tool_name = f"execute_skill_{skill_id}"
-        description = skill.metadata.description or skill.metadata.capability or f"Execute {skill_id}"
+    def _register_sandbox_tools(self) -> None:
+        """Register sandbox execution tools (E2B)."""
+        register_sandbox_tools(self._registry, context=self._context, approval_manager=self._approvals)
+
+    def _register_documentation_tools(self) -> None:
+        """Register documentation query tools."""
+        from storage.firestore_client import FirestoreClient
+        from agents.worker.documentation_loader import (
+            load_all_documentation,
+            get_documentation_by_id,
+            search_documentation,
+        )
         
-        # Capture grpc_client in closure
-        grpc = self._grpc
+        context = self._context  # Capture for closures
         
-        def make_handler(skill_map, grpc_client):
-            def handler() -> Dict[str, Any]:
-                from agents.worker.graph import StepExecutor
+        def get_documentation(
+            doc_id: str = "",
+            tags: List[str] = None,
+            list_all: bool = False
+        ) -> Dict[str, Any]:
+            """Query documentation from storage."""
+            try:
+                if doc_id:
+                    # Get specific document by ID
+                    doc = get_documentation_by_id(doc_id, context)
+                    if doc:
+                        return {
+                            "content": [{
+                                "type": "text",
+                                "text": doc.get_full_content()
+                            }]
+                        }
+                    else:
+                        return {
+                            "content": [{"type": "text", "text": f"Documentation '{doc_id}' not found"}],
+                            "isError": True
+                        }
                 
-                skill_id = skill_map.metadata.skill_id
-                print(f"[Worker] Executing skill: {skill_id}")
-                print(f"[Worker]   Steps: {len(skill_map.steps)}")
+                elif tags:
+                    # Search by tags
+                    docs = search_documentation(tags, context)
+                    if docs:
+                        results = []
+                        for doc in docs:
+                            results.append(f"**{doc.metadata.title}** (ID: {doc.metadata.doc_id})")
+                            results.append(f"  {doc.metadata.description}")
+                            results.append(f"  Tags: {', '.join(doc.metadata.tags)}")
+                            results.append("")
+                        return {
+                            "content": [{
+                                "type": "text",
+                                "text": f"Found {len(docs)} documents:\n\n" + "\n".join(results)
+                            }]
+                        }
+                    else:
+                        return {
+                            "content": [{"type": "text", "text": f"No documentation found for tags: {tags}"}]
+                        }
                 
-                try:
-                    executor = StepExecutor(grpc_client, dry_run=False)
-                    statuses = executor.execute_skill(skill_map)
-                    success = all(st.success for st in statuses) if statuses else False
-                    
-                    print(f"[Worker]   Result: {'SUCCESS' if success else 'FAILED'}")
-                    for st in statuses:
-                        print(f"[Worker]     Step {st.step_index}: {st.action} - {st.message}")
-                    
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": json.dumps({
-                                "success": success,
-                                "skill_id": skill_id,
-                                "statuses": [st.model_dump() for st in statuses],
-                            })
-                        }]
-                    }
-                except Exception as e:
-                    import traceback
-                    print(f"[Worker]   ERROR: {e}")
-                    traceback.print_exc()
-                    return {
-                        "content": [{"type": "text", "text": f"Error: {str(e)}"}],
-                        "isError": True,
-                    }
-            return handler
+                else:
+                    # List all documentation (summaries only)
+                    docs = load_all_documentation(context)
+                    if docs:
+                        results = []
+                        for doc in docs:
+                            results.append(f"- **{doc.metadata.title}** (ID: `{doc.metadata.doc_id}`)")
+                            results.append(f"  Type: {doc.metadata.doc_type}")
+                            if doc.metadata.description:
+                                results.append(f"  {doc.metadata.description}")
+                            if doc.metadata.tags:
+                                results.append(f"  Tags: {', '.join(doc.metadata.tags)}")
+                            results.append("")
+                        return {
+                            "content": [{
+                                "type": "text",
+                                "text": f"## Available Documentation ({len(docs)} documents)\n\n" + "\n".join(results) + "\n\nUse get_documentation with doc_id to read full content."
+                            }]
+                        }
+                    else:
+                        return {
+                            "content": [{"type": "text", "text": "No documentation available for this application."}]
+                        }
+                        
+            except Exception as e:
+                return {
+                    "content": [{"type": "text", "text": f"Error querying documentation: {str(e)}"}],
+                    "isError": True
+                }
         
         self._registry.register_tool(
-            name=tool_name,
-            description=description,
-            input_schema={"type": "object", "properties": {}},
-            handler=make_handler(skill, grpc),
+            name="get_documentation",
+            description="""Query documentation about the application. Use this FIRST to understand the software before taking actions.
+
+Usage:
+- List all docs: get_documentation() with no arguments
+- Get specific doc: get_documentation(doc_id="doc-id-here")
+- Search by tags: get_documentation(tags=["navigation", "login"])
+
+Always start by listing available documentation to understand what guidance exists.""",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "doc_id": {
+                        "type": "string",
+                        "description": "Specific document ID to retrieve (get full content)"
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Tags to search for (returns matching documents)"
+                    }
+                }
+            },
+            handler=lambda doc_id="", tags=None: get_documentation(doc_id, tags or []),
         )
+        
+        # Log documentation availability
+        try:
+            docs = load_all_documentation(context)
+            print(f"[Worker] Found {len(docs)} documentation entries")
+        except Exception:
+            print("[Worker] Could not load documentation")
 
     def execute(
         self,
         task: str,
         app_name: Optional[str] = None,
         additional_context: str = "",
+        summarized_conversation_history: Optional[str] = None,
+        raw_conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> AgentResult:
         """
         Execute a task using pure ReAct.
@@ -154,6 +336,8 @@ class AutonomousWorker:
             tool_registry=self._registry,
             system_prompt=WORKER_SYSTEM_PROMPT,
             config=self._config,
+            summarized_conversation_history=summarized_conversation_history,
+            raw_conversation_history=raw_conversation_history,
         )
         
         print(f"[Worker] Executing task: {task[:80]}...")

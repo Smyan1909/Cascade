@@ -124,6 +124,8 @@ enum ControlType {
   TREE = 5;
   TABLE = 6;
   CUSTOM = 7;
+  LISTITEM = 8;  // ListItem, checkbox, radio button
+  TAB = 9;       // TabItem
 }
 
 enum ImageFormat {
@@ -289,4 +291,7 @@ message AgentAck {
   string user_id = 4;
   string app_id = 5;
 }
+
+// NOTE: CodeExecutionService has been removed.
+// Cascade now executes non-UI programmatic automation (file transforms) in a sandboxed Python environment.
 

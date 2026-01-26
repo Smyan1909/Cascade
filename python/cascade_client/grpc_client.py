@@ -185,6 +185,7 @@ class CascadeGrpcClient:
             )
         return self._agent_stub
 
+
     def _is_retryable_error(self, error: grpc.RpcError) -> bool:
         """Check if error is retryable."""
         if error.code() in (

@@ -1,0 +1,39 @@
+{
+  "objective": "Map Microsoft Teams workflows for safe messaging and navigation, restricted to self-chat only.",
+  "app_context": "Microsoft Teams (desktop)",
+  "automation_hierarchy": [
+    "If a cloud/web API exists for the task, use that (WEB_API skill).",
+    "If no API exists but the task is a safe file transform, create a Python Sandbox skill (metadata.sandbox) and run it in E2B.",
+    "If neither exists, fall back to UI automation via clicking/typing."
+  ],
+  "constraints": [
+    "COMMUNICATION SAFETY: Only use self-chat. Do not message any other user, group chat, channel, or external contact.",
+    "All outbound test messages must start with prefix: [CASCADE-TEST].",
+    "Do not start calls/meetings, do not share screen, do not join external meetings",
+    "Do not post in channels; do not @mention anyone",
+    "Prefer stable UI selectors (left nav rail, chat list, message composer, send button)"
+  ],
+  "coverage": {
+    "navigation": [
+      "open Chat section",
+      "locate self-chat (or start self-chat if available)",
+      "open Activity/Calendar views (read-only)"
+    ],
+    "messaging_self_only": [
+      "send a plain text message to self ([CASCADE-TEST])",
+      "send a multi-line message",
+      "react to a message (if available)",
+      "copy message text"
+    ],
+    "attachments_self_only": [
+      "attach a small test file to self-chat (optional if available)",
+      "verify attachment preview and send (self only)"
+    ],
+    "search": [
+      "search within Teams",
+      "search within self-chat",
+      "clear search"
+    ]
+  }
+}
+

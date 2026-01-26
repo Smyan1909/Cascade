@@ -1,0 +1,48 @@
+{
+  "objective": "Map Cursor (IDE) workflows so workers can safely navigate codebases, edit files, search, run commands, and use built-in tools without destructive actions.",
+  "app_context": "Cursor (desktop IDE)",
+  "automation_hierarchy": [
+    "If a direct API exists for the task, use that (WEB_API skill).",
+    "If no API exists but the task is a safe file transform, create a Python Sandbox skill (metadata.sandbox) and run it in E2B.",
+    "If neither exists, fall back to UI automation via clicking/typing."
+  ],
+  "constraints": [
+    "Work only in a dedicated test workspace/repo; do not modify unrelated user projects",
+    "Do not push to remotes, publish extensions, or change global Git config",
+    "Avoid destructive operations (mass delete, reformat entire repo) unless explicitly instructed",
+    "Prefer stable UI selectors (Explorer tree, Command Palette, editor tabs, terminal panel)",
+    "If a command runs code, prefer read-only/safe commands first (e.g., tests, lint) and avoid anything that deletes data"
+  ],
+  "coverage": {
+    "workspace_navigation": [
+      "open folder/workspace",
+      "file explorer expand/collapse",
+      "open file",
+      "switch editor tabs",
+      "split editor"
+    ],
+    "search_refactor": [
+      "find in file",
+      "global search",
+      "go to definition",
+      "rename symbol (in a small safe sample file)"
+    ],
+    "editing": [
+      "insert text",
+      "multi-cursor basics",
+      "format document (only if repo has formatter configured)",
+      "save file"
+    ],
+    "terminal_tasks": [
+      "open terminal panel",
+      "run a harmless command (e.g., listing files) in the integrated terminal",
+      "stop a running task"
+    ],
+    "git_safe": [
+      "view git status UI",
+      "create a local commit in a test repo (optional, if safe and explicitly allowed)",
+      "avoid pushing"
+    ]
+  }
+}
+

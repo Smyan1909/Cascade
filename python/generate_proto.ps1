@@ -32,6 +32,22 @@ python -m grpc_tools.protoc `
     "$protoFile"
 
 if ($LASTEXITCODE -eq 0) {
+    # Patch generated gRPC stubs to use package-safe relative imports.
+    # grpc_tools can emit e.g. `import cascade_pb2 as cascade__pb2`, which fails when
+    # the stubs are used as a package (`cascade_client.proto`). We avoid editing the
+    # generator and instead post-process the output.
+    $grpcStubFiles = Get-ChildItem -Path $outputDir -Filter "*_pb2_grpc.py" -File
+    foreach ($file in $grpcStubFiles) {
+        $raw = Get-Content -Path $file.FullName -Raw
+        $patched = $raw `
+            -replace '(?m)^import\s+(\w+_pb2)\s+as\s+(\w+)\s*$', 'from . import $1 as $2' `
+            -replace '(?m)^import\s+(\w+_pb2)\s*$', 'from . import $1'
+        if ($patched -ne $raw) {
+            Set-Content -Path $file.FullName -Value $patched -Encoding UTF8
+            Write-Host "Patched imports in: $($file.Name)" -ForegroundColor Cyan
+        }
+    }
+
     Write-Host "Successfully generated gRPC stubs!" -ForegroundColor Green
     Write-Host "Generated files:" -ForegroundColor Cyan
     Get-ChildItem $outputDir | ForEach-Object { Write-Host "  - $($_.Name)" -ForegroundColor White }

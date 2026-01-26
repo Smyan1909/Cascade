@@ -7,8 +7,51 @@ from pydantic import BaseModel, Field, validator
 
 from cascade_client.models import ActionType, Selector
 
-PreferredMethod = Literal["api", "ui"]
+PreferredMethod = Literal["api", "sandbox", "ui"]
 SkillType = Literal["primitive", "composite"]
+
+
+class SandboxFunctionSpec(BaseModel):
+    """A Python function used within a sandbox skill."""
+
+    module: str = Field(..., description="Python module path, e.g. openpyxl")
+    function: str = Field(..., description="Function name, e.g. load_workbook")
+    description: str = Field(default="", description="What this function is used for")
+
+
+class SandboxFileSpec(BaseModel):
+    """File input/output contract entry for sandbox execution."""
+
+    name: str = Field(..., description="Logical name used in inputs (e.g., 'workbook')")
+    file_glob: str = Field(..., description="Expected file type(s), e.g. '*.xlsx'")
+    required: bool = Field(default=True)
+
+
+class SandboxFileIoSpec(BaseModel):
+    """Describes sandbox file IO contract (copy-in/run/copy-out)."""
+
+    inputs: List[SandboxFileSpec] = Field(default_factory=list)
+    outputs: List[SandboxFileSpec] = Field(default_factory=list)
+    notes: str = Field(default="", description="Any constraints about IO behavior")
+
+
+class SandboxSpec(BaseModel):
+    """Sandbox execution configuration stored on a Skill Map."""
+
+    provider: Literal["e2b"] = Field(default="e2b")
+    python_packages: List[str] = Field(
+        default_factory=list,
+        description="Pip requirement strings needed to run this skill (e.g. openpyxl, python-pptx).",
+    )
+    functions: Dict[str, SandboxFunctionSpec] = Field(
+        default_factory=dict,
+        description="Mapping of task verb -> function spec (e.g. 'open_workbook' -> openpyxl.load_workbook).",
+    )
+    file_io: SandboxFileIoSpec = Field(default_factory=SandboxFileIoSpec)
+    entrypoint: str = Field(
+        default="",
+        description="Canonical operation name Worker should invoke (key in functions), if applicable.",
+    )
 
 
 class SkillMetadata(BaseModel):
@@ -72,6 +115,24 @@ class SkillMetadata(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc),
         description="Last update timestamp",
     )
+    
+    # Initial state context: describes the application state when this skill was discovered
+    initial_state_description: str = Field(
+        default="",
+        description="Human-readable description of the initial application state when this skill was discovered (e.g., 'Calculator in Standard mode')",
+    )
+    initial_state_tree: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional semantic tree snapshot of the initial state. Include only when the human-readable description is ambiguous or insufficient.",
+    )
+    requires_initial_state: bool = Field(
+        default=False,
+        description="If True, the application must be in the initial state before executing this skill",
+    )
+
+    # Sandbox-based programmatic automation (optional).
+    # When present, Worker should run the operation in an E2B sandbox and copy files in/out.
+    sandbox: Optional[SandboxSpec] = Field(default=None)
 
 class ApiEndpoint(BaseModel):
     """API endpoint description for automation."""
@@ -182,6 +243,10 @@ class SkillMap(BaseModel):
 
     def choose_method_for_step(self, step: SkillStep) -> PreferredMethod:
         """Decide method per step based on availability and metadata preference."""
+        # If this is a sandbox skill, the whole skill is expected to run in sandbox,
+        # regardless of individual step fields.
+        if self.metadata.preferred_method == "sandbox" and self.metadata.sandbox is not None:
+            return "sandbox"
         if self.metadata.preferred_method == "api" and step.prefer_api():
             return "api"
         if self.metadata.preferred_method == "ui" and step.prefer_ui():
@@ -196,5 +261,9 @@ class SkillMap(BaseModel):
 
 def default_action_for_method(method: PreferredMethod) -> str:
     """Return a canonical action verb for the given method."""
-    return "CallAPI" if method == "api" else ActionType.CLICK.name
+    if method == "api":
+        return "CallAPI"
+    if method == "sandbox":
+        return "RunSandbox"
+    return ActionType.CLICK.name
 

@@ -1,0 +1,64 @@
+{
+  "objective": "Map core Microsoft Excel workflows so workers can create/edit spreadsheets, analyze data, and export results safely.",
+  "app_context": "Microsoft Excel (desktop)",
+  "automation_hierarchy": [
+    "If a cloud/web API exists for the task, use that (WEB_API skill).",
+    "If no API exists and the task is a file transform (e.g., .xlsx), create a Python Sandbox skill (metadata.sandbox) and run it in E2B.",
+    "If neither exists, fall back to UI automation via clicking/typing."
+  ],
+  "programmatic_policy": {
+    "prefer_file_automation": true,
+    "sandbox_provider": "e2b",
+    "expected_packages": ["openpyxl"],
+    "notes": "Focus on file-level automation (editing .xlsx) using sandboxed Python, not controlling the live Excel UI, unless UI is the only option."
+  },
+  "constraints": [
+    "Be nondestructive: never modify existing real workbooks unless explicitly created during this run",
+    "Use a new blank workbook for most exploration",
+    "When saving files, save only to a dedicated test folder and use a unique filename prefix like CASCADE_TEST_",
+    "Do not enable or run macros; avoid add-ins that can affect the system",
+    "Prefer stable UI selectors (ribbon tabs, named controls); avoid OCR unless necessary"
+  ],
+  "coverage": {
+    "workbook_file_ops": [
+      "create new workbook",
+      "open existing test workbook from test folder",
+      "save",
+      "save as (xlsx, csv, pdf)"
+    ],
+    "editing_basics": [
+      "select cell/range",
+      "enter text/number/date",
+      "copy/paste",
+      "fill handle (autofill)",
+      "format cells (number formats, font, alignment)"
+    ],
+    "formulas_functions": [
+      "basic formulas (=A1+B1, relative/absolute refs)",
+      "common functions (SUM, AVERAGE, IF, XLOOKUP/VLOOKUP)",
+      "error handling (#DIV/0, #N/A) and fixing"
+    ],
+    "tables_sort_filter": [
+      "create table",
+      "sort",
+      "filter",
+      "remove filters"
+    ],
+    "charts_visualization": [
+      "create chart (column/line)",
+      "edit chart title/labels",
+      "export chart via save as PDF"
+    ],
+    "data_tools": [
+      "text to columns",
+      "remove duplicates",
+      "data validation (dropdown list)"
+    ],
+    "printing_export": [
+      "page layout basics",
+      "print preview",
+      "export to PDF"
+    ]
+  }
+}
+

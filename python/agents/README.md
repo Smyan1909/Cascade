@@ -2,6 +2,8 @@
 
 Autonomous agents for UI automation with hierarchical skill learning.
 
+For the repo-wide architecture and dev rules, see `AGENTS.md`.
+
 ## Quick Start
 
 ```powershell
@@ -33,6 +35,13 @@ agents/
 └── orchestrator/            # Coordinates high-level goals
     └── autonomous_orchestrator.py
 ```
+
+### Orchestrator note (two implementations)
+
+There are **two orchestrators** in this repo:
+
+- `agents/orchestrator/`: **Autonomous orchestrator** (LLM tool-driven, rapid experimentation)
+- `python/orchestrator/`: **Deterministic orchestrator** (LangGraph + A2A dispatch, predictable/testable)
 
 ## Skill Types
 

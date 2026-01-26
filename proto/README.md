@@ -2,11 +2,24 @@
 
 `cascade.proto` defines the contract between the Python Brain and C# Body. Follow `docs/phase1-grpc.md` and `docs/00-overview.md` for architecture and data boundaries.
 
-## Codegen (run later)
-- Python: `python -m grpc_tools.protoc -I proto --python_out=. --grpc_python_out=. proto/cascade.proto`
+## Codegen
+
+Treat the proto as the **single source of truth**; do not edit generated code.
+
+### Python
+
+Preferred: use the repo scripts (they generate into `python/cascade_client/proto/`):
+- Windows: `python\generate_proto.ps1`
+- Linux/Mac: `python/generate_proto.sh`
+
+Manual equivalent (from repo root):
+
+`python -m grpc_tools.protoc -I proto --python_out=python/cascade_client/proto --grpc_python_out=python/cascade_client/proto proto/cascade.proto`
+
+### C#
+
 - C#: install `dotnet-grpc` or use `Grpc.Tools`, e.g.  
   `dotnet-grpc --proto proto/cascade.proto --csharp_out src/Body/Generated --grpc_out src/Body/Generated --services=Server --csharp_opt=base_namespace=Cascade.Proto`
-- Treat the proto as the single source of truth; do not edit generated code.
 
 ## Contract testing
 - Lint: `buf lint` (or `protoc --lint_out` equivalent) in CI.

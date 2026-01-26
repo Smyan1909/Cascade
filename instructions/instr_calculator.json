@@ -1,6 +1,9 @@
 {
   "objective": "Map every capability of the Windows Calculator app so workers can perform any calculation.",
   "app_context": "Windows Calculator",
+  "automation_hierarchy": [
+    "use only UI automation"
+  ],
   "constraints": [
     "Be nondestructive; do not change system settings",
     "Prefer stable UI selectors; avoid OCR unless necessary"
