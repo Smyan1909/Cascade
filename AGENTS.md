@@ -271,10 +271,87 @@ Proto/codegen (when `proto/cascade.proto` changes):
 
 ---
 
+## OpenClaw Plugin
+
+Cascade now includes a full OpenClaw integration as an **official plugin**. This provides natural language control over desktop and web automation.
+
+### What is OpenClaw?
+
+OpenClaw is an open-source personal AI assistant framework that connects to messaging platforms and provides tool-calling capabilities. The Cascade plugin adds 29 tools to OpenClaw for:
+- Desktop automation (Windows apps)
+- Web automation (Playwright)
+- API calls
+- Agent communication
+
+### Getting Started
+
+```bash
+# Install OpenClaw
+curl -fsSL https://openclaw.ai/install.sh | bash
+
+# Install Cascade plugin
+openclaw plugins install openclaw-cascade-plugin
+
+# Configure (add to ~/.openclaw/config.json)
+{
+  "plugins": {
+    "entries": {
+      "openclaw-cascade-plugin": {
+        "enabled": true,
+        "config": {
+          "cascadeGrpcEndpoint": "localhost:50051"
+        }
+      }
+    }
+  }
+}
+
+# Start using
+openclaw "Open Calculator and calculate 25 * 4"
+
+# CLI commands
+openclaw cascade:status
+```
+
+### Plugin Features
+
+- **29 Tools**: Desktop (9), Web (15), API (2), Sandbox (1), A2A (3)
+- **Auto-detection**: Python, applications, UI elements
+- **Smart screenshots**: Embeds small images, saves large ones to disk
+- **A2A support**: Communicate with Explorer/Worker/Orchestrator agents (opt-in)
+- **Error handling**: Friendly messages with suggestions
+
+### Plugin Development
+
+The plugin is in `openclaw-plugin/` directory:
+```
+openclaw-plugin/
+├── src/
+│   ├── tools/           # Tool implementations
+│   ├── python-manager.ts
+│   ├── cascade-client.ts
+│   └── a2a-client.ts
+├── tests/
+└── package.json
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for plugin development guidelines.
+
+### Plugin Testing
+
+```powershell
+cd openclaw-plugin
+npm install
+npm test
+```
+
+---
+
 ## Troubleshooting
 
 - **“Proto stubs not generated”**: run `python/generate_proto.ps1` and ensure `python/cascade_client/proto/` contains `cascade_pb2*.py`.
-- **gRPC can’t connect**: verify Body is running and `CASCADE_GRPC_ENDPOINT` matches (default `localhost:50051`).
+- **gRPC can't connect**: verify Body is running and `CASCADE_GRPC_ENDPOINT` matches (default `localhost:50051`).
 - **Firestore path bugs**: verify all writes go under `/artifacts/{app_id}/users/{user_id}/...` (see `docs/00-overview.md`).
+- **OpenClaw plugin not found**: Run `openclaw plugins list` and verify openclaw-cascade-plugin is installed. If not, reinstall with `openclaw plugins install openclaw-cascade-plugin`.
 
 
