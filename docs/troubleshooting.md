@@ -32,6 +32,29 @@ Common issues and solutions for Cascade OpenClaw Plugin.
    export PATH="$HOME/.openclaw/bin:$PATH"
    ```
 
+### Missing `cascadeGrpcEndpoint`
+
+**Error:** `must have required property 'cascadeGrpcEndpoint'`
+
+**Fix:** add this block to `~/.openclaw/openclaw.json`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      openclaw-cascade-plugin: {
+        enabled: true,
+        config: {
+          cascadeGrpcEndpoint: "localhost:50051"
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
 ## Connection Issues
 
 ### Cannot Connect to Cascade Body

@@ -292,26 +292,16 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 # Install Cascade plugin
 openclaw plugins install openclaw-cascade-plugin
 
-# Configure (add to ~/.openclaw/config.json)
-{
-  "plugins": {
-    "entries": {
-      "openclaw-cascade-plugin": {
-        "enabled": true,
-        "config": {
-          "cascadeGrpcEndpoint": "localhost:50051"
-        }
-      }
-    }
-  }
-}
-
 # Start using
 openclaw "Open Calculator and calculate 25 * 4"
 
 # CLI commands
 openclaw cascade:status
 ```
+
+The plugin now operates completely zero-config out of the box and connects to the local gRPC endpoint. It also lazily loads its Python dependencies only when tools are requested so OpenClaw's startup process is fast.
+
+You only need to modify `~/.openclaw/config.json` if you wish to connect to a remote endpoint or override standard settings.
 
 ### Plugin Features
 

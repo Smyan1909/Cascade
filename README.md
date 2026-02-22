@@ -49,6 +49,8 @@ openclaw plugins uninstall cascade
 openclaw plugins install openclaw-cascade-plugin@1.0.3
 ```
 
+OpenClaw may block postinstall auto-editing for security. If the install reports missing `cascadeGrpcEndpoint`, add the plugin entry manually (see below).
+
 To make the install fully automatic (including `PYTHONPATH`), set your repo path before installing:
 ```bash
 export CASCADE_REPO_PATH=/path/to/cascade

@@ -75,7 +75,7 @@ python3 --version  # Should be 3.10+
 
 ### Basic Configuration
 
-The installer auto-creates the plugin entry in `~/.openclaw/openclaw.json`. If you want to edit manually, the entry key must match the manifest id (`openclaw-cascade-plugin`).
+OpenClaw may block postinstall auto-editing for security. If the install reports missing `cascadeGrpcEndpoint`, add the plugin entry manually (see below). The entry key must match the manifest id (`openclaw-cascade-plugin`).
 
 If `mcp_server` is not found, set `cascadePythonModulePath` to your Cascade repo's `python/` directory.
 
