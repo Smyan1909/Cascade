@@ -93,6 +93,9 @@ For detailed schemas and examples (including web via `platform_source: WEB`), se
 - `CONTRIBUTING.md` — development setup and contribution workflow
 - `CHANGELOG.md` — release history
 
+## Demo
+- [![Demo video](https://img.youtube.com/vi/NACA-dGzPBc/0.jpg)](https://www.youtube.com/watch?v=NACA-dGzPBc)
+
 ## Contributing
 We welcome issues and PRs. See `CONTRIBUTING.md` for setup, tests, and code style.
 
