@@ -264,6 +264,7 @@ docker-data/
 *.msi
 *.msix
 *.appx
+*.tgz
 setup.exe
 
 ## Published outputs

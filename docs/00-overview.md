@@ -1,37 +1,41 @@
 # Cascade Overview
 
-Purpose: high-level architecture, data boundaries, and conventions before writing code. This doc is the contract for all other phase guides.
+This document describes the architecture, data boundaries, and conventions that Cascade follows. It is the single source of truth for how the system fits together.
 
 ## Architecture at a Glance
-- Processes: Python Brain (Explorer, Worker, Orchestrator) + C# Body (gRPC). Communication via `cascade.proto`.
-- Persistence: Firestore only, user-scoped at `/artifacts/{__app_id}/users/{userId}/{collection}`. No local JSON/YAML for skills or checkpoints.
-- Auth: `__initial_auth_token` initializes Firestore and binds `userId` + `__app_id`. All persistence and agent init must include this context.
-- Model policy: LLM-agnostic; select provider/name/endpoint via env at runtime. Never hardcode model IDs.
-- Platforms: Windows/Java via UIA3 (FlaUI); Web via Playwright. OCR via Windows.Media.Ocr; input fallback via InputSimulatorPlus.
-- Agent-to-Agent (A2A): gRPC `AgentCommService` lets Explorer/Worker/Orchestrator for the same user/app exchange messages; delivery is at-least-once so handlers must be idempotent on `message_id`.
+- **Body (C#)**: hosts UI automation providers for Windows UIA3, Java UIA, and Playwright (web).
+- **Brain (Python)**: Explorer, Worker, and Orchestrator agents that plan and execute tasks.
+- **OpenClaw plugin**: exposes Cascade tools so users can drive automation with natural language.
+- **Persistence (optional)**: Firestore stores skills and checkpoints under strict user/app scoping.
 
-## Data & Paths
-- Skill Maps: `/artifacts/{__app_id}/users/{userId}/skill_maps/{skillId}`
-- Worker checkpoints: `/artifacts/{__app_id}/users/{userId}/worker_checkpoints/{runId}`
-- Explorer checkpoints: `/artifacts/{__app_id}/users/{userId}/explorer_checkpoints/{runId}`
-- Orchestrator checkpoints: `/artifacts/{__app_id}/users/{userId}/orchestrator_checkpoints/{runId}`
-- Other collections (metrics/logs) must also nest under the same user/app path.
+## Core Contracts
+- **gRPC contract**: `proto/cascade.proto` defines selectors, actions, and tool payloads.
+- **Selector stability**: prefer `element_id` (runtime ID) and `automation_id` when available; fall back to name/control type/path.
+- **Text entry**: `text_entry_mode` controls append vs replace.
+
+## Data & Paths (Firestore)
+All data is scoped under:
+- `/artifacts/{app_id}/users/{user_id}/...`
+
+Common collections:
+- `skill_maps`
+- `explorer_checkpoints`
+- `worker_checkpoints`
+- `orchestrator_checkpoints`
 
 ## Configuration (env-first)
-- Firestore: `GOOGLE_APPLICATION_CREDENTIALS` or token env; `CASCADE_APP_ID`, `CASCADE_USER_ID`, `CASCADE_AUTH_TOKEN`.
-- Models: `CASCADE_MODEL_PROVIDER`, `CASCADE_MODEL_NAME`, `CASCADE_MODEL_ENDPOINT`, `CASCADE_MODEL_API_KEY` (if needed).
-- gRPC endpoint: `CASCADE_GRPC_ENDPOINT` (host:port).
-- Runtime toggles: headless (Playwright), timeouts, retries, log level.
+- **gRPC**: `CASCADE_GRPC_ENDPOINT`
+- **Firestore**: `CASCADE_APP_ID`, `CASCADE_USER_ID`, `CASCADE_AUTH_TOKEN`, `GOOGLE_APPLICATION_CREDENTIALS`
+- **Models**: `CASCADE_MODEL_PROVIDER`, `CASCADE_MODEL_NAME`, `CASCADE_MODEL_ENDPOINT`, `CASCADE_MODEL_API_KEY`
+- **Runtime**: headless mode, action timeouts, log levels
 
-## Logging & Telemetry
-- Structured JSON logs; include `userId`, `appId`, `runId`, correlation IDs.
-- Separate interaction logs (actions, selectors) from model prompts; redact sensitive fields.
-- A2A handlers must log message ids and skip already-processed deliveries.
+## Security & Safety
+- UI automation runs locally; use remote endpoints only if you trust the network.
+- A2A is opt-in and allow-listed.
+- Firestore credentials are user-supplied and never embedded in code.
 
-## Testing Strategy (summary)
-- Unit per layer, contract tests for proto, provider smoke tests (UIA3/Playwright), Firestore emulator tests for persistence, integration per agent, optional E2E via docker-compose.
-
-## Deliverables for this Phase
-- This overview doc, referenced by all other phase docs.
-- Agreement on naming, env keys, and Firestore path structure.
-
+## Testing Summary
+- gRPC contract tests for `proto/cascade.proto`
+- Provider smoke tests (UIA3 + Playwright)
+- Agent unit + integration tests
+- Firestore emulator tests for persistence

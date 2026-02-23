@@ -11,6 +11,7 @@ using FlaUI.Core.Input;
 using FlaUI.Core.Patterns;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Conditions;
+using FlaUI.Core.WindowsAPI;
 using FlaUI.UIA3;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -19,6 +20,8 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
 using System.IO;
+using System.Text.Json;
+
 using Application = FlaUI.Core.Application;
 using ProtoImageFormat = Cascade.Proto.ImageFormat;
 using DrawingImageFormat = System.Drawing.Imaging.ImageFormat;
@@ -627,7 +630,38 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
             automationId = null;
         }
 
+        string? className = null;
+        try
+        {
+            className = element.Properties.ClassName?.TryGetValue(out var cn) == true ? cn : null;
+        }
+        catch
+        {
+            className = null;
+        }
+
+        string? frameworkId = null;
+        try
+        {
+            frameworkId = element.Properties.FrameworkId?.TryGetValue(out var fid) == true ? fid : null;
+        }
+        catch
+        {
+            frameworkId = null;
+        }
+
+        string? helpText = null;
+        try
+        {
+            helpText = element.Properties.HelpText?.TryGetValue(out var ht) == true ? ht : null;
+        }
+        catch
+        {
+            helpText = null;
+        }
+
         string? name = null;
+
         try
         {
             name = element.Properties.Name?.TryGetValue(out var nm) == true ? nm : null;
@@ -667,10 +701,26 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
             uiElement.AutomationId = automationId;
         }
 
+        if (!string.IsNullOrWhiteSpace(className))
+        {
+            uiElement.ClassName = className;
+        }
+
+        if (!string.IsNullOrWhiteSpace(frameworkId))
+        {
+            uiElement.FrameworkId = frameworkId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(helpText))
+        {
+            uiElement.HelpText = helpText;
+        }
+
         if (!string.IsNullOrWhiteSpace(value))
         {
             uiElement.ValueText = value;
         }
+
         else if (!string.IsNullOrWhiteSpace(name))
         {
             uiElement.ValueText = name;
@@ -764,12 +814,82 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
         // Build filter conditions
         var filtered = candidatesList.Where(e =>
         {
-            // Id filter
-            if (!string.IsNullOrWhiteSpace(selector.Id))
+            // ElementId filter (runtime id or automation id fallback)
+            if (!string.IsNullOrWhiteSpace(selector.ElementId))
             {
                 try
                 {
-                    if (!string.Equals(e.AutomationId, selector.Id, StringComparison.OrdinalIgnoreCase))
+                    var runtimeId = e.Properties.RuntimeId?.ValueOrDefault;
+                    var runtimeValue = runtimeId != null && runtimeId.Length > 0 ? runtimeId[0].ToString() : null;
+                    if (!string.IsNullOrWhiteSpace(runtimeValue))
+                    {
+                        if (!string.Equals(runtimeValue, selector.ElementId, StringComparison.OrdinalIgnoreCase))
+                            return false;
+                    }
+                    else
+                    {
+                        if (!string.Equals(e.AutomationId, selector.ElementId, StringComparison.OrdinalIgnoreCase))
+                            return false;
+                    }
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            // AutomationId filter (selector.automation_id or legacy selector.id)
+            var automationIdFilter = !string.IsNullOrWhiteSpace(selector.AutomationId) ? selector.AutomationId : selector.Id;
+            if (!string.IsNullOrWhiteSpace(automationIdFilter))
+            {
+                try
+                {
+                    if (!string.Equals(e.AutomationId, automationIdFilter, StringComparison.OrdinalIgnoreCase))
+                        return false;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            // ClassName filter
+            if (!string.IsNullOrWhiteSpace(selector.ClassName))
+            {
+                try
+                {
+                    var className = e.Properties.ClassName?.TryGetValue(out var cn) == true ? cn : null;
+                    if (!string.Equals(className, selector.ClassName, StringComparison.OrdinalIgnoreCase))
+                        return false;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            // FrameworkId filter
+            if (!string.IsNullOrWhiteSpace(selector.FrameworkId))
+            {
+                try
+                {
+                    var frameworkId = e.Properties.FrameworkId?.TryGetValue(out var fid) == true ? fid : null;
+                    if (!string.Equals(frameworkId, selector.FrameworkId, StringComparison.OrdinalIgnoreCase))
+                        return false;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            // HelpText filter
+            if (!string.IsNullOrWhiteSpace(selector.HelpText))
+            {
+                try
+                {
+                    var helpText = e.Properties.HelpText?.TryGetValue(out var ht) == true ? ht : null;
+                    if (!string.Equals(helpText, selector.HelpText, StringComparison.OrdinalIgnoreCase))
                         return false;
                 }
                 catch
@@ -819,6 +939,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
 
             return true;
         }).ToList();
+
 
         Console.WriteLine($"[DIAG] After all filters: {candidatesList.Count} -> {filtered.Count}");
         // Debug: show some matching elements
@@ -966,19 +1087,24 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
 
             case ActionType.TypeText:
                 var text = action.Text ?? string.Empty;
-                Console.WriteLine($"[DIAG] TryHandleWithPatterns TypeText: trying ValuePattern first");
+                if (IsAppendText(action))
+                {
+                    Console.WriteLine("[DIAG] TryHandleWithPatterns TypeText: append mode, skipping ValuePattern");
+                    return false;
+                }
+                Console.WriteLine("[DIAG] TryHandleWithPatterns TypeText: trying ValuePattern first");
                 if (UiaPatterns.TrySetValue(target, text))
                 {
-                    Console.WriteLine($"[DIAG] TryHandleWithPatterns TypeText: ValuePattern succeeded");
+                    Console.WriteLine("[DIAG] TryHandleWithPatterns TypeText: ValuePattern succeeded");
                     return true;
                 }
-                Console.WriteLine($"[DIAG] TryHandleWithPatterns TypeText: ValuePattern failed, trying TextPattern");
+                Console.WriteLine("[DIAG] TryHandleWithPatterns TypeText: ValuePattern failed, trying TextPattern");
                 if (UiaPatterns.TryTextInsert(target, text))
                 {
-                    Console.WriteLine($"[DIAG] TryHandleWithPatterns TypeText: TextPattern succeeded");
+                    Console.WriteLine("[DIAG] TryHandleWithPatterns TypeText: TextPattern succeeded");
                     return true;
                 }
-                Console.WriteLine($"[DIAG] TryHandleWithPatterns TypeText: both patterns failed, will fallback to keyboard");
+                Console.WriteLine("[DIAG] TryHandleWithPatterns TypeText: both patterns failed, will fallback to keyboard");
                 return false;
 
             case ActionType.Focus:
@@ -992,9 +1118,46 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                 target.WaitUntilClickable(TimeSpan.FromMilliseconds(_options.ActionTimeoutMs));
                 return true;
 
+            case ActionType.Toggle:
+                return UiaPatterns.TryToggle(target);
+
+            case ActionType.Expand:
+                return UiaPatterns.TryExpand(target, ExpandCollapseState.Expanded);
+
+            case ActionType.Collapse:
+                return UiaPatterns.TryExpand(target, ExpandCollapseState.Collapsed);
+
+            case ActionType.Select:
+                return UiaPatterns.TrySelectionItem(target) || UiaPatterns.TrySelect(target);
+
+            case ActionType.SetRangeValue:
+                return UiaPatterns.TryRangeValue(target, action.Number);
+
+            case ActionType.SendKeys:
+                return TrySendKeys(target, action);
+
+            case ActionType.WindowMinimize:
+                return UiaPatterns.TryWindow(target, pattern => pattern.SetWindowVisualState(WindowVisualState.Minimized));
+
+            case ActionType.WindowMaximize:
+                return UiaPatterns.TryWindow(target, pattern => pattern.SetWindowVisualState(WindowVisualState.Maximized));
+
+            case ActionType.WindowRestore:
+                return UiaPatterns.TryWindow(target, pattern => pattern.SetWindowVisualState(WindowVisualState.Normal));
+
+            case ActionType.WindowClose:
+                return UiaPatterns.TryWindow(target, pattern => pattern.Close());
+
+            case ActionType.Move:
+                return TryTransformMove(target, action);
+
+            case ActionType.Resize:
+                return TryTransformResize(target, action);
+
             default:
                 return false;
         }
+
     }
 
     private async Task<bool> FallbackInputAsync(AutomationElement target, ActionProto action, CancellationToken cancellationToken)
@@ -1008,13 +1171,21 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                     target.Click(true);
                     return true;
                 case ActionType.TypeText:
-                    Console.WriteLine($"[DIAG] FallbackInputAsync TypeText: using keyboard input");
+                    Console.WriteLine("[DIAG] FallbackInputAsync TypeText: using keyboard input");
                     target.WaitUntilClickable(TimeSpan.FromMilliseconds(_options.ActionTimeoutMs));
                     target.Focus();
                     var textToType = action.Text ?? string.Empty;
                     Console.WriteLine($"[DIAG] FallbackInputAsync TypeText: typing '{textToType}'");
+                    if (IsAppendText(action))
+                    {
+                        Keyboard.Type(VirtualKeyShort.END);
+                    }
+                    else
+                    {
+                        Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
+                    }
                     Keyboard.Type(textToType);
-                    Console.WriteLine($"[DIAG] FallbackInputAsync TypeText: keyboard input completed");
+                    Console.WriteLine("[DIAG] FallbackInputAsync TypeText: keyboard input completed");
                     return true;
                 case ActionType.Hover:
                     var pt = target.GetClickablePoint();
@@ -1028,15 +1199,224 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
                 case ActionType.WaitVisible:
                     target.WaitUntilClickable(TimeSpan.FromMilliseconds(_options.ActionTimeoutMs));
                     return true;
+                case ActionType.Toggle:
+                case ActionType.Expand:
+                case ActionType.Collapse:
+                case ActionType.Select:
+                    target.WaitUntilClickable(TimeSpan.FromMilliseconds(_options.ActionTimeoutMs));
+                    target.Click(true);
+                    return true;
+                case ActionType.SetRangeValue:
+                    return UiaPatterns.TryRangeValue(target, action.Number);
+                case ActionType.SendKeys:
+                    return TrySendKeys(target, action);
+                case ActionType.WindowMinimize:
+                    return UiaPatterns.TryWindow(target, pattern => pattern.SetWindowVisualState(WindowVisualState.Minimized));
+                case ActionType.WindowMaximize:
+                    return UiaPatterns.TryWindow(target, pattern => pattern.SetWindowVisualState(WindowVisualState.Maximized));
+                case ActionType.WindowRestore:
+                    return UiaPatterns.TryWindow(target, pattern => pattern.SetWindowVisualState(WindowVisualState.Normal));
+                case ActionType.WindowClose:
+                    return UiaPatterns.TryWindow(target, pattern => pattern.Close());
+                case ActionType.Move:
+                    return TryTransformMove(target, action);
+                case ActionType.Resize:
+                    return TryTransformResize(target, action);
                 default:
                     return false;
             }
+
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Fallback input failed for {Action}", action.ActionType);
             return false;
         }
+    }
+
+    private static bool IsAppendText(ActionProto action)
+    {
+        return action.TextEntryMode != TextEntryMode.Replace;
+    }
+
+    private bool TrySendKeys(AutomationElement target, ActionProto action)
+    {
+        var textToSend = action.Text;
+        if (string.IsNullOrWhiteSpace(textToSend))
+        {
+            textToSend = action.JsonPayload;
+        }
+
+        if (string.IsNullOrWhiteSpace(textToSend))
+        {
+            return false;
+        }
+
+        target.Focus();
+        var trimmed = textToSend.Trim();
+        var isChord = trimmed.Contains('+');
+        var separators = isChord ? new[] { '+' } : new[] { ',', ' ' };
+        var parts = trimmed.Split(separators, StringSplitOptions.RemoveEmptyEntries);
+        var parsedKeys = new List<VirtualKeyShort>();
+        var parsedAll = true;
+        foreach (var part in parts)
+        {
+            if (TryParseVirtualKey(part, out var key))
+            {
+                parsedKeys.Add(key);
+            }
+            else
+            {
+                parsedAll = false;
+                break;
+            }
+        }
+
+        if (!parsedAll || parsedKeys.Count == 0)
+        {
+            Keyboard.Type(trimmed);
+            return true;
+        }
+
+        if (isChord)
+        {
+            Keyboard.TypeSimultaneously(parsedKeys.ToArray());
+        }
+        else
+        {
+            Keyboard.Type(parsedKeys.ToArray());
+        }
+
+        return true;
+    }
+
+    private static bool TryParseVirtualKey(string raw, out VirtualKeyShort key)
+    {
+        key = default;
+        var normalized = raw.Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return false;
+        }
+
+        var aliases = new Dictionary<string, VirtualKeyShort>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["CTRL"] = VirtualKeyShort.CONTROL,
+            ["CONTROL"] = VirtualKeyShort.CONTROL,
+            ["ALT"] = VirtualKeyShort.ALT,
+            ["SHIFT"] = VirtualKeyShort.SHIFT,
+            ["ENTER"] = VirtualKeyShort.RETURN,
+            ["RETURN"] = VirtualKeyShort.RETURN,
+            ["ESC"] = VirtualKeyShort.ESCAPE,
+            ["ESCAPE"] = VirtualKeyShort.ESCAPE,
+            ["BACKSPACE"] = VirtualKeyShort.BACK,
+            ["DEL"] = VirtualKeyShort.DELETE,
+            ["DELETE"] = VirtualKeyShort.DELETE,
+            ["TAB"] = VirtualKeyShort.TAB,
+            ["SPACE"] = VirtualKeyShort.SPACE,
+            ["UP"] = VirtualKeyShort.UP,
+            ["DOWN"] = VirtualKeyShort.DOWN,
+            ["LEFT"] = VirtualKeyShort.LEFT,
+            ["RIGHT"] = VirtualKeyShort.RIGHT,
+            ["HOME"] = VirtualKeyShort.HOME,
+            ["END"] = VirtualKeyShort.END,
+            ["PGUP"] = VirtualKeyShort.PRIOR,
+            ["PAGEUP"] = VirtualKeyShort.PRIOR,
+            ["PGDN"] = VirtualKeyShort.NEXT,
+            ["PAGEDOWN"] = VirtualKeyShort.NEXT,
+            ["INS"] = VirtualKeyShort.INSERT,
+            ["INSERT"] = VirtualKeyShort.INSERT,
+            ["WIN"] = VirtualKeyShort.LWIN
+        };
+
+        if (aliases.TryGetValue(normalized, out key))
+        {
+            return true;
+        }
+
+        if (normalized.Length == 1)
+        {
+            if (char.IsLetter(normalized[0]))
+            {
+                normalized = $"KEY_{normalized}";
+            }
+            else if (char.IsDigit(normalized[0]))
+            {
+                normalized = $"KEY_{normalized}";
+            }
+        }
+
+        if (Enum.TryParse(normalized, true, out VirtualKeyShort parsed))
+        {
+            key = parsed;
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryTransformMove(AutomationElement target, ActionProto action)
+    {
+        if (string.IsNullOrWhiteSpace(action.JsonPayload))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(action.JsonPayload);
+            var root = doc.RootElement;
+            if (!TryGetJsonNumber(root, "x", out var x) || !TryGetJsonNumber(root, "y", out var y))
+            {
+                return false;
+            }
+
+            return UiaPatterns.TryTransform(target, pattern => pattern.Move(x, y));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool TryTransformResize(AutomationElement target, ActionProto action)
+    {
+        if (string.IsNullOrWhiteSpace(action.JsonPayload))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(action.JsonPayload);
+            var root = doc.RootElement;
+            if (!TryGetJsonNumber(root, "width", out var width) || !TryGetJsonNumber(root, "height", out var height))
+            {
+                return false;
+            }
+
+            return UiaPatterns.TryTransform(target, pattern => pattern.Resize(width, height));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetJsonNumber(JsonElement root, string name, out double value)
+    {
+        value = 0;
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (!root.TryGetProperty(name, out var property))
+        {
+            return false;
+        }
+
+        return property.TryGetDouble(out value);
     }
 
     private bool FocusElement(AutomationElement element)
@@ -1051,6 +1431,7 @@ public class UIA3AutomationProvider : IAutomationProvider, IDisposable
             return false;
         }
     }
+
 
     private FlaUI.Core.Definitions.ControlType? MapControlType(Cascade.Proto.ControlType controlType) =>
         controlType switch
