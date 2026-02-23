@@ -4,7 +4,11 @@
 
 Cascade is an open-source desktop automation platform for Windows. It combines a C# UI Automation "Body" (UIA3 + Playwright) with a Python "Brain" (Explorer/Worker/Orchestrator agents) and an OpenClaw plugin so you can control apps and browsers with natural language.
 
+## Demo
+- [![Demo video](https://img.youtube.com/vi/NACA-dGzPBc/0.jpg)](https://www.youtube.com/watch?v=NACA-dGzPBc)
+
 ## Highlights
+
 - Windows desktop automation via Microsoft UI Automation (UIA3) and FlaUI.
 - Web automation via Playwright.
 - Screenshot tagging + OCR to help agents reason about UI.
@@ -92,9 +96,6 @@ For detailed schemas and examples (including web via `platform_source: WEB`), se
 - `docs/troubleshooting.md` — common issues and fixes
 - `CONTRIBUTING.md` — development setup and contribution workflow
 - `CHANGELOG.md` — release history
-
-## Demo
-- [![Demo video](https://img.youtube.com/vi/NACA-dGzPBc/0.jpg)](https://www.youtube.com/watch?v=NACA-dGzPBc)
 
 ## Contributing
 We welcome issues and PRs. See `CONTRIBUTING.md` for setup, tests, and code style.
