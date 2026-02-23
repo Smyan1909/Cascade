@@ -1,0 +1,28 @@
+# Example OpenClaw Configuration for Cascade
+
+# Copy this file to ~/.openclaw/openclaw.json and customize
+{
+  "plugins": {
+    "enabled": true,
+    "entries": {
+      "openclaw-cascade-plugin": {
+        "enabled": true,
+        "config": {
+          "cascadeGrpcEndpoint": "localhost:50051",
+          "cascadePythonPath": "/usr/bin/python3",
+          "cascadePythonModulePath": "/path/to/cascade/python",
+          "firestoreProjectId": "",
+          "firestoreCredentialsPath": "",
+          "headless": false,
+          "actionTimeoutMs": 8000,
+          "enableA2A": false,
+          "allowedAgents": ["explorer", "worker", "orchestrator"],
+          "requireAgentConfirmation": true,
+          "verbose": false,
+          "screenshotMode": "auto",
+          "screenshotDir": ""
+        }
+      }
+    }
+  }
+}

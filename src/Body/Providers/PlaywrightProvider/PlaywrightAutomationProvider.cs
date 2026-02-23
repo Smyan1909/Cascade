@@ -177,8 +177,19 @@ public class PlaywrightAutomationProvider : IAutomationProvider, IAsyncDisposabl
                     break;
                 case ActionType.TypeText:
                     await locator.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = _options.ActionTimeoutMs }).ConfigureAwait(false);
-                    await locator.FillAsync(action.Text ?? string.Empty, new LocatorFillOptions { Timeout = _options.ActionTimeoutMs }).ConfigureAwait(false);
+                    var entryMode = action.TextEntryMode == TextEntryMode.Replace
+                        ? TextEntryMode.Replace
+                        : TextEntryMode.Append;
+                    if (entryMode == TextEntryMode.Append)
+                    {
+                        await locator.TypeAsync(action.Text ?? string.Empty, new LocatorTypeOptions { Timeout = _options.ActionTimeoutMs }).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await locator.FillAsync(action.Text ?? string.Empty, new LocatorFillOptions { Timeout = _options.ActionTimeoutMs }).ConfigureAwait(false);
+                    }
                     break;
+
                 case ActionType.Hover:
                     await locator.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = _options.ActionTimeoutMs }).ConfigureAwait(false);
                     await locator.HoverAsync(new LocatorHoverOptions { Timeout = _options.ActionTimeoutMs }).ConfigureAwait(false);

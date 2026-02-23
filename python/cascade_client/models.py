@@ -22,6 +22,27 @@ class ActionType(IntEnum):
     FOCUS = 4
     SCROLL = 5
     WAIT_VISIBLE = 6
+    TOGGLE = 7
+    EXPAND = 8
+    COLLAPSE = 9
+    SELECT = 10
+    SET_RANGE_VALUE = 11
+    SEND_KEYS = 12
+    WINDOW_MINIMIZE = 13
+    WINDOW_MAXIMIZE = 14
+    WINDOW_RESTORE = 15
+    WINDOW_CLOSE = 16
+    MOVE = 17
+    RESIZE = 18
+
+
+class TextEntryMode(IntEnum):
+    """Text entry modes for TYPE_TEXT."""
+
+    TEXT_ENTRY_MODE_UNSPECIFIED = 0
+    APPEND = 1
+    REPLACE = 2
+
 
 
 class PlatformSource(IntEnum):
@@ -113,6 +134,10 @@ class UIElement(BaseModel):
         default=None, description="Automation ID (optional)"
     )
     value_text: Optional[str] = Field(default=None, description="Value text (optional)")
+    class_name: Optional[str] = Field(default=None, description="Class name (optional)")
+    framework_id: Optional[str] = Field(default=None, description="Framework ID (optional)")
+    help_text: Optional[str] = Field(default=None, description="Help text (optional)")
+
 
     @classmethod
     def from_proto(cls, proto_msg) -> "UIElement":
@@ -131,7 +156,11 @@ class UIElement(BaseModel):
             if proto_msg.HasField("automation_id")
             else None,
             value_text=proto_msg.value_text if proto_msg.HasField("value_text") else None,
+            class_name=proto_msg.class_name if proto_msg.HasField("class_name") else None,
+            framework_id=proto_msg.framework_id if proto_msg.HasField("framework_id") else None,
+            help_text=proto_msg.help_text if proto_msg.HasField("help_text") else None,
         )
+
 
     def to_proto(self):
         """Convert to proto message."""
@@ -158,7 +187,17 @@ class UIElement(BaseModel):
             if self.value_text is not None:
                 msg.value_text = self.value_text
 
+            if self.class_name is not None:
+                msg.class_name = self.class_name
+
+            if self.framework_id is not None:
+                msg.framework_id = self.framework_id
+
+            if self.help_text is not None:
+                msg.help_text = self.help_text
+
             return msg
+
         except ImportError:
             raise ImportError(
                 "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
@@ -245,13 +284,19 @@ class Selector(BaseModel):
         ..., description="Platform source"
     )
     path: List[str] = Field(default_factory=list, description="Path components")
-    id: Optional[str] = Field(default=None, description="Element ID filter")
+    id: Optional[str] = Field(default=None, description="Legacy automation ID filter")
     name: Optional[str] = Field(default=None, description="Element name filter")
     control_type: Optional[ControlType] = Field(
         default=None, description="Control type filter"
     )
     index: Optional[int] = Field(default=None, description="Index filter")
     text_hint: Optional[str] = Field(default=None, description="Text hint filter")
+    element_id: Optional[str] = Field(default=None, description="Element runtime ID")
+    automation_id: Optional[str] = Field(default=None, description="Automation ID")
+    class_name: Optional[str] = Field(default=None, description="Class name")
+    framework_id: Optional[str] = Field(default=None, description="Framework ID")
+    help_text: Optional[str] = Field(default=None, description="Help text")
+
 
     @staticmethod
     def _coerce_int_enum(value: Any, enum_cls: type[IntEnum], *, aliases: Dict[str, str] | None = None) -> IntEnum:
@@ -330,7 +375,17 @@ class Selector(BaseModel):
             else None,
             index=proto_msg.index if proto_msg.HasField("index") else None,
             text_hint=proto_msg.text_hint if proto_msg.HasField("text_hint") else None,
+            element_id=proto_msg.element_id if proto_msg.HasField("element_id") else None,
+            automation_id=proto_msg.automation_id
+            if proto_msg.HasField("automation_id")
+            else None,
+            class_name=proto_msg.class_name if proto_msg.HasField("class_name") else None,
+            framework_id=proto_msg.framework_id
+            if proto_msg.HasField("framework_id")
+            else None,
+            help_text=proto_msg.help_text if proto_msg.HasField("help_text") else None,
         )
+
 
     def to_proto(self):
         """Convert to proto message."""
@@ -357,7 +412,23 @@ class Selector(BaseModel):
             if self.text_hint is not None:
                 msg.text_hint = self.text_hint
 
+            if self.element_id is not None:
+                msg.element_id = self.element_id
+
+            if self.automation_id is not None:
+                msg.automation_id = self.automation_id
+
+            if self.class_name is not None:
+                msg.class_name = self.class_name
+
+            if self.framework_id is not None:
+                msg.framework_id = self.framework_id
+
+            if self.help_text is not None:
+                msg.help_text = self.help_text
+
             return msg
+
         except ImportError:
             raise ImportError(
                 "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"
@@ -372,6 +443,10 @@ class Action(BaseModel):
     text: Optional[str] = Field(default=None, description="Text payload")
     number: Optional[float] = Field(default=None, description="Numeric payload")
     json_payload: Optional[str] = Field(default=None, description="JSON payload")
+    text_entry_mode: Optional[TextEntryMode] = Field(
+        default=None, description="Text entry mode"
+    )
+
 
     @classmethod
     def from_proto(cls, proto_msg) -> "Action":
@@ -379,7 +454,11 @@ class Action(BaseModel):
         action = cls(
             action_type=ActionType(proto_msg.action_type),
             selector=Selector.from_proto(proto_msg.selector),
+            text_entry_mode=TextEntryMode(proto_msg.text_entry_mode)
+            if proto_msg.HasField("text_entry_mode")
+            else None,
         )
+
 
         # Handle oneof payload
         if proto_msg.HasField("text"):
@@ -409,7 +488,11 @@ class Action(BaseModel):
             elif self.json_payload is not None:
                 msg.json_payload = self.json_payload
 
+            if self.text_entry_mode is not None:
+                msg.text_entry_mode = self.text_entry_mode.value
+
             return msg
+
         except ImportError:
             raise ImportError(
                 "Proto stubs not generated. Run generate_proto.ps1 or generate_proto.sh"

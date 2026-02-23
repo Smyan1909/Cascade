@@ -1,0 +1,123 @@
+{
+  "id": "openclaw-cascade-plugin",
+  "name": "Cascade Desktop Automation",
+  "description": "Control Windows desktop apps and web browsers through OpenClaw. Provides desktop automation, web automation with Playwright, and skill learning capabilities.",
+  "version": "1.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "cascadeGrpcEndpoint": {
+        "type": "string",
+        "default": "localhost:50051",
+        "description": "gRPC endpoint for Cascade Body (format: host:port)"
+      },
+      "cascadePythonPath": {
+        "type": "string",
+        "description": "Path to Python executable (optional, auto-detected if not set)"
+      },
+      "cascadePythonModulePath": {
+        "type": "string",
+        "description": "Path to Cascade Python modules (e.g., /path/to/cascade/python)"
+      },
+      "firestoreProjectId": {
+        "type": "string",
+        "description": "Firebase project ID for skill storage (optional)"
+      },
+      "firestoreCredentialsPath": {
+        "type": "string",
+        "description": "Path to Firebase service account JSON (optional)"
+      },
+      "headless": {
+        "type": "boolean",
+        "default": false,
+        "description": "Run Playwright in headless mode (no visible browser window)"
+      },
+      "actionTimeoutMs": {
+        "type": "integer",
+        "default": 8000,
+        "minimum": 1000,
+        "description": "Timeout for UI actions in milliseconds"
+      },
+      "enableA2A": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable Agent-to-Agent communication (EXPLICIT OPT-IN REQUIRED)"
+      },
+      "allowedAgents": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["explorer", "worker", "orchestrator"]
+        },
+        "description": "Which agents OpenClaw is allowed to call (requires enableA2A: true)"
+      },
+      "requireAgentConfirmation": {
+        "type": "boolean",
+        "default": true,
+        "description": "Require user confirmation before calling agents"
+      },
+      "verbose": {
+        "type": "boolean",
+        "default": false,
+        "description": "Include debug information in error messages"
+      },
+      "screenshotMode": {
+        "type": "string",
+        "enum": ["embed", "disk", "auto"],
+        "default": "auto",
+        "description": "How to handle screenshots: embed in response, save to disk, or auto-decide based on size"
+      },
+      "screenshotDir": {
+        "type": "string",
+        "description": "Directory to save screenshots when mode is 'disk' or 'auto' (default: ~/.openclaw/screenshots)"
+      }
+    }
+  },
+  "uiHints": {
+    "cascadeGrpcEndpoint": {
+      "label": "Cascade gRPC Endpoint",
+      "placeholder": "localhost:50051"
+    },
+    "cascadePythonPath": {
+      "label": "Python Path",
+      "placeholder": "/usr/bin/python3 (auto-detected)"
+    },
+    "cascadePythonModulePath": {
+      "label": "Python Module Path",
+      "placeholder": "/path/to/cascade/python"
+    },
+    "firestoreProjectId": {
+      "label": "Firestore Project ID"
+    },
+    "firestoreCredentialsPath": {
+      "label": "Firebase Credentials",
+      "sensitive": true
+    },
+    "headless": {
+      "label": "Headless Mode",
+      "description": "Run browser automation without visible window"
+    },
+    "enableA2A": {
+      "label": "Enable Agent Communication",
+      "description": "Allow OpenClaw to call Cascade agents (Explorer, Worker, Orchestrator)"
+    },
+    "allowedAgents": {
+      "label": "Allowed Agents"
+    },
+    "requireAgentConfirmation": {
+      "label": "Require Confirmation",
+      "description": "Ask for confirmation before calling agents"
+    },
+    "verbose": {
+      "label": "Verbose Mode",
+      "description": "Include debug details in error messages"
+    },
+    "screenshotMode": {
+      "label": "Screenshot Handling"
+    },
+    "screenshotDir": {
+      "label": "Screenshot Directory"
+    }
+  }
+}
